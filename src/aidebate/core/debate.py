@@ -91,6 +91,7 @@ def _verdict_prompt(
     openings: dict[str, str],
     rebuttals: dict[str, str],
     chat_path: Path,
+    dropouts: list[dict] | None = None,
 ) -> str:
     side_blocks = []
     for s in sides:
@@ -99,11 +100,25 @@ def _verdict_prompt(
             f"**Opening:**\n\n{openings.get(s.role, '(no opening)')}\n\n"
             f"**Rebuttal:**\n\n{rebuttals.get(s.role, '(no rebuttal)')}"
         )
+    dropout_note = ""
+    if dropouts:
+        lines = [
+            f"- `{d['role']}` ({d.get('agent','?')}) — dropped during {d['phase']}: {d['error']}"
+            for d in dropouts
+        ]
+        dropout_note = (
+            "\n\n## Participants who dropped out\n"
+            "These debaters failed to deliver (agent crashed, auth expired, "
+            "CLI misbehaved, etc.). Judge only the debaters who did submit; "
+            "do NOT penalize them for the dropouts or invent positions for "
+            "the absent ones.\n\n" + "\n".join(lines)
+        )
     return (
         "# Debate — Moderator verdict\n\n"
         f"## Topic\n{topic}\n\n"
         "## Debater submissions\n\n"
         + "\n\n---\n\n".join(side_blocks)
+        + dropout_note
         + f"\n\n## Group chat transcript\nYou may also consult: {chat_path}\n\n"
         "## Your task\n"
         "You are the moderator. Render a reasoned verdict:\n\n"
@@ -147,13 +162,27 @@ def run_debate(
         "completed_at": None,
     }
     manifest_path = session.root / "session.json"
+    manifest["dropouts"] = []  # list[{role, agent, phase, error}]
     manifest_path.write_text(json.dumps(manifest, indent=2))
 
+    def _record_dropout(role: str, phase: str, err: Exception) -> None:
+        agent_name = next(
+            (s.agent for s in sides if s.role == role), "?"
+        )
+        entry = {
+            "role": role,
+            "agent": agent_name,
+            "phase": phase,
+            "error": str(err),
+            "at": datetime.now().isoformat(timespec="seconds"),
+        }
+        manifest["dropouts"].append(entry)
+        manifest_path.write_text(json.dumps(manifest, indent=2))
+        print(f"[debate] DROPOUT: {role}@{agent_name} failed during {phase}: {err}")
+
     # Spawn moderator first so it becomes the main (leftmost) pane; then
-    # debaters split off to the right. Layout: moderator on the left (~1/3),
-    # debaters stacked on the right. Each participant may use a different
+    # debaters split off to the right. Each participant may use a different
     # agent engine.
-    all_roles = [s.role for s in sides]
     assignment = ", ".join(f"{s.role}@{s.agent}" for s in sides)
     print(f"[debate] spawning panes: moderator@{moderator_agent} + {assignment}")
     moderator = spawn_agent_pane(session, "moderator", load_adapter(moderator_agent))
@@ -165,8 +194,11 @@ def run_debate(
     if on_session_ready is not None:
         on_session_ready(session)
 
-    # Canary handshakes in parallel — all panes confirm they can read prompts
-    # and touch flag files before we trust them.
+    # -----------------------------------------------------------------
+    # Canary handshakes (parallel).
+    # Moderator failure is fatal. Debater failures are logged; we carry
+    # on with whoever survived, as long as at least one debater did.
+    # -----------------------------------------------------------------
     print(f"[debate] canary handshakes (timeout {canary_timeout}s)...")
     import threading
     canary_errors: dict[str, Exception] = {}
@@ -184,35 +216,79 @@ def run_debate(
         ths.append(th)
     for th in ths:
         th.join()
+
+    if "moderator" in canary_errors:
+        err = canary_errors["moderator"]
+        print(f"[debate] MODERATOR CANARY FAILED: {err}")
+        raise RuntimeError(f"moderator canary handshake failed: {err}")
+
+    for role, err in canary_errors.items():
+        if role == "moderator":
+            continue
+        _record_dropout(role, "canary", err)
+        panes.pop(role, None)
+    active_sides = [s for s in sides if s.role in panes]
+    if not active_sides:
+        raise RuntimeError(
+            "no debaters survived the canary handshake — cannot proceed"
+        )
     if canary_errors:
-        for role, err in canary_errors.items():
-            print(f"[debate] CANARY FAILED for {role}: {err}")
-        raise RuntimeError("one or more canary handshakes failed")
-    print("[debate] all canaries OK")
+        survivors = ", ".join(s.role for s in active_sides)
+        print(f"[debate] carrying on with {len(active_sides)} debater(s): {survivors}")
+    else:
+        print("[debate] all canaries OK")
 
     chat_path = session.chat_path
 
+    # -----------------------------------------------------------------
+    # Helper: run a parallel phase, drop anyone who fails, and require
+    # at least one survivor to continue.
+    # -----------------------------------------------------------------
+    def _run_phase(
+        phase_name: str,
+        phase_dir: Path,
+        build_prompt,  # (Side) -> str
+    ) -> dict[str, str]:
+        tasks = [Task(panes[s.role], build_prompt(s)) for s in active_sides]
+        results = run_parallel(tasks, phase_dir, timeout=turn_timeout)
+        answers: dict[str, str] = {}
+        for r, res in results.items():
+            if res.error:
+                _record_dropout(r, phase_name, res.error)
+                panes.pop(r, None)
+            elif res.answer is not None:
+                answers[r] = res.answer
+        # Update active_sides in place.
+        active_sides[:] = [s for s in active_sides if s.role in panes]
+        if not active_sides:
+            raise RuntimeError(
+                f"no debaters survived phase '{phase_name}' — cannot proceed"
+            )
+        return answers
+
     # Phase 1 — Opening (parallel)
-    print("[debate] phase 1: opening (parallel)")
-    phase1_dir = session.root / "phase-1-opening"
-    tasks = [
-        Task(panes[s.role], _opening_prompt(topic, s, chat_path, all_roles))
-        for s in sides
-    ]
-    openings_raw = run_parallel(tasks, phase1_dir, timeout=turn_timeout)
-    _check_results(openings_raw, "opening")
-    openings = {r: res.answer for r, res in openings_raw.items()}
+    print(f"[debate] phase 1: opening (parallel, {len(active_sides)} debater(s))")
+    openings = _run_phase(
+        "opening",
+        session.root / "phase-1-opening",
+        lambda s: _opening_prompt(
+            topic, s, chat_path, [x.role for x in active_sides]
+        ),
+    )
 
     # Phase 2 — Rebuttal (parallel)
-    print("[debate] phase 2: rebuttal (parallel)")
-    phase2_dir = session.root / "phase-2-rebuttal"
-    tasks = [
-        Task(panes[s.role], _rebuttal_prompt(topic, s, openings, chat_path))
-        for s in sides
-    ]
-    rebuttals_raw = run_parallel(tasks, phase2_dir, timeout=turn_timeout)
-    _check_results(rebuttals_raw, "rebuttal")
-    rebuttals = {r: res.answer for r, res in rebuttals_raw.items()}
+    # Only useful with 2+ surviving debaters; with 1 left, skip — there's
+    # nothing to rebut.
+    if len(active_sides) >= 2:
+        print(f"[debate] phase 2: rebuttal (parallel, {len(active_sides)} debater(s))")
+        rebuttals = _run_phase(
+            "rebuttal",
+            session.root / "phase-2-rebuttal",
+            lambda s: _rebuttal_prompt(topic, s, openings, chat_path),
+        )
+    else:
+        print("[debate] phase 2: skipped (only one debater left — nothing to rebut)")
+        rebuttals = {}
 
     # Phase 3 — Verdict (moderator)
     print("[debate] phase 3: verdict (moderator)")
@@ -220,7 +296,10 @@ def run_debate(
     verdict_text = run_turn(
         moderator,
         phase3_dir,
-        _verdict_prompt(topic, sides, openings, rebuttals, chat_path),
+        _verdict_prompt(
+            topic, active_sides, openings, rebuttals, chat_path,
+            dropouts=manifest["dropouts"],
+        ),
         timeout=turn_timeout,
     )
     verdict_path = session.root / "verdict.md"
@@ -234,11 +313,3 @@ def run_debate(
     manifest_path.write_text(json.dumps(manifest, indent=2))
 
     return session
-
-
-def _check_results(results: dict, phase: str) -> None:
-    errors = {r: res.error for r, res in results.items() if res.error}
-    if errors:
-        for role, err in errors.items():
-            print(f"[debate] {phase} FAILED for {role}: {err}")
-        raise RuntimeError(f"phase '{phase}' had failures")

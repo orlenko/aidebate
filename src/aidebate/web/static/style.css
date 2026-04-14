@@ -425,3 +425,17 @@ details pre {
   border-radius: 3px;
 }
 
+.dropout {
+  display: inline-block;
+  font-size: 0.7rem;
+  padding: 0.08rem 0.4rem;
+  border-radius: 999px;
+  background: rgba(232,140,140,0.15);
+  color: var(--err);
+  border: 1px solid rgba(232,140,140,0.3);
+  margin-left: 0.3rem;
+  vertical-align: middle;
+  cursor: help;
+}
+tr.dropped td { opacity: 0.6; }
+

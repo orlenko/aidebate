@@ -65,3 +65,43 @@ def test_verdict_prompt_includes_every_submission(tmp_path: Path):
         assert needle in text
     # Moderator must be asked to pick a winner.
     assert "Winner" in text
+
+
+def test_verdict_prompt_notes_dropouts(tmp_path: Path):
+    sides = [Side(role="pro", stance="yes", agent="claude")]  # only survivor
+    text = _verdict_prompt(
+        topic="X",
+        sides=sides,
+        openings={"pro": "opening"},
+        rebuttals={},
+        chat_path=tmp_path / "chat.jsonl",
+        dropouts=[
+            {
+                "role": "con",
+                "agent": "gemini",
+                "phase": "canary",
+                "error": "auth expired",
+                "at": "2026-04-14T12:00:00",
+            },
+        ],
+    )
+    assert "dropped out" in text.lower() or "dropped" in text
+    assert "con" in text
+    assert "auth expired" in text
+    # Moderator must be told not to penalize survivors for the dropouts.
+    assert "do NOT penalize" in text or "do not penalize" in text.lower()
+
+
+def test_verdict_prompt_no_dropout_section_when_empty(tmp_path: Path):
+    text = _verdict_prompt(
+        topic="X",
+        sides=_sides(),
+        openings={"pro": "O-pro", "con": "O-con"},
+        rebuttals={"pro": "R-pro", "con": "R-con"},
+        chat_path=tmp_path / "chat.jsonl",
+        dropouts=[],
+    )
+    # When no dropouts, the "Participants who dropped out" section should
+    # not appear at all — moderator shouldn't have to reason about an
+    # empty absentee list.
+    assert "dropped out" not in text

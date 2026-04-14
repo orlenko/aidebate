@@ -186,13 +186,22 @@ async function openArchive(sid) {
   el("arc-status").textContent = m.status || "unknown";
   el("arc-moderator").innerHTML = agentIcon(m.moderator_agent || "");
   const sides = m.sides || [];
+  const droppedRoles = new Set((m.dropouts || []).map(d => d.role));
   el("arc-participants").innerHTML = sides.length
     ? `<table class="info-table">
          <thead><tr><th>role</th><th>agent</th><th>directions</th></tr></thead>
-         <tbody>${sides.map(s =>
-           `<tr><td><code>${escapeHtml(s.role)}</code></td>
-                <td>${agentIcon(s.agent)}</td>
-                <td>${escapeHtml(s.stance)}</td></tr>`).join("")}</tbody>
+         <tbody>${sides.map(s => {
+           const dropped = droppedRoles.has(s.role);
+           const drop = (m.dropouts || []).find(d => d.role === s.role);
+           const droppedBadge = dropped
+             ? `<span class="dropout" title="${escapeHtml(drop ? drop.phase + ': ' + drop.error : 'dropped out')}">dropped @ ${escapeHtml(drop ? drop.phase : '?')}</span>`
+             : "";
+           return `<tr${dropped ? ' class="dropped"' : ''}>
+                     <td><code>${escapeHtml(s.role)}</code> ${droppedBadge}</td>
+                     <td>${agentIcon(s.agent)}</td>
+                     <td>${escapeHtml(s.stance)}</td>
+                   </tr>`;
+         }).join("")}</tbody>
        </table>`
     : "";
   el("arc-verdict").innerHTML = data.verdict ? renderMarkdown(data.verdict) : "";
