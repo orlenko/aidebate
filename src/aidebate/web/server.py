@@ -50,10 +50,19 @@ class SessionState:
     subscribers: list[queue.Queue] = field(default_factory=list)
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
+    # Cap the in-memory event buffer so long-running servers don't
+    # accumulate unbounded pane captures. New subscribers still get a
+    # backlog, just a trimmed one.
+    EVENT_BUFFER_MAX: int = 500
+
     def emit(self, event: dict) -> None:
         event = {"id": len(self.events), **event, "ts": time.time()}
         with self._lock:
             self.events.append(event)
+            if len(self.events) > self.EVENT_BUFFER_MAX:
+                # Drop the oldest chunk in one shot to keep the common
+                # path O(1) amortized.
+                self.events = self.events[-self.EVENT_BUFFER_MAX :]
             subs = list(self.subscribers)
         for q in subs:
             try:
@@ -187,6 +196,15 @@ def list_sessions() -> list[dict]:
     """
     if not sessions_root().exists():
         return []
+    # "Really running" = we have in-memory SessionState for it. A manifest
+    # that still says running but whose SessionState is gone (server
+    # restarted mid-run) gets downgraded to "stale" so the UI doesn't
+    # pretend the debate is still live.
+    with SESSIONS_LOCK:
+        live_ids = {
+            sid for sid, st in SESSIONS.items()
+            if st.status in ("starting", "running")
+        }
     out: list[dict] = []
     for d in sorted(sessions_root().iterdir(), reverse=True):
         if not d.is_dir():
@@ -205,6 +223,8 @@ def list_sessions() -> list[dict]:
                     "completed_at": data.get("completed_at"),
                     "has_verdict": bool(data.get("verdict_path")),
                 })
+                if data.get("status") == "running" and d.name not in live_ids:
+                    entry["status"] = "stale"
             except Exception:
                 pass
         out.append(entry)

@@ -83,6 +83,29 @@ def test_session_detail_404_for_unknown(sessions_dir: Path):
     assert r.status_code == 404
 
 
+def test_session_marked_stale_when_running_but_no_live_state(sessions_dir: Path):
+    """Manifest says running but nothing in the in-memory SESSIONS dict
+    (server restarted mid-run) — list should downgrade it to 'stale'.
+    """
+    sid = "2026-04-14-200000"
+    sdir = sessions_dir / sid
+    sdir.mkdir(parents=True)
+    (sdir / "session.json").write_text(json.dumps({
+        "session_id": sid,
+        "topic": "X?",
+        "moderator_agent": "claude",
+        "sides": [],
+        "status": "running",
+        "created_at": "2026-04-14T20:00:00",
+    }))
+    client = TestClient(app)
+    r = client.get("/api/sessions")
+    assert r.status_code == 200
+    entry = next((e for e in r.json() if e["session_id"] == sid), None)
+    assert entry is not None
+    assert entry["status"] == "stale"
+
+
 def test_create_debate_walks_import_path(sessions_dir: Path, monkeypatch):
     """POST /api/debates should not explode on ModuleNotFoundError-style bugs.
 

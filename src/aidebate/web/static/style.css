@@ -220,10 +220,15 @@ details pre {
   letter-spacing: 0.05em;
 }
 
-#sessions-list {
+#sessions-list,
+#running-list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(20rem, 1fr));
   gap: 0.6rem;
+}
+#running-list .session-card {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 15%, transparent);
 }
 .session-card {
   display: block;

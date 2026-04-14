@@ -35,6 +35,11 @@
       <button type="submit">Start debate</button>
     </form>
 
+    <div id="running-now" hidden>
+      <h2 style="margin-top:2rem">Running now</h2>
+      <div id="running-list"></div>
+    </div>
+
     <h2 style="margin-top:2rem">Prior debates</h2>
     <div id="sessions-list">
       <p style="color:var(--muted);font-size:0.9rem">loading…</p>
@@ -43,6 +48,9 @@
 
   <!-- ================= LIVE VIEW ================= -->
   <section id="live" hidden>
+    <div class="arc-actions">
+      <button id="live-back" type="button">← home</button>
+    </div>
     <div class="meta">
       <div><strong>topic:</strong> <span id="live-topic"></span></div>
       <div><strong>session:</strong> <code id="live-sid"></code></div>

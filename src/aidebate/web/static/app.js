@@ -135,51 +135,117 @@ function showSetup() {
   loadSessions();
 }
 
+function navigate(path) {
+  // Central helper — changing hash triggers `hashchange` which runs the
+  // router. Callers stay decoupled from which view actually mounts.
+  if (location.hash === path) router();  // same hash → force re-route
+  else location.hash = path;
+}
+
+function currentRoute() {
+  const m = (location.hash || "").match(/^#\/(live|archive)\/(.+)$/);
+  if (!m) return { view: "setup" };
+  return { view: m[1], sid: decodeURIComponent(m[2]) };
+}
+
+async function router() {
+  const route = currentRoute();
+  if (route.view === "live") {
+    // Reuse the in-flight payload if it matches; otherwise reconstruct
+    // from the server manifest.
+    if (CURRENT_PAYLOAD && CURRENT_SID === route.sid) {
+      enterLiveView(CURRENT_PAYLOAD, route.sid);
+      return;
+    }
+    try {
+      const data = await _fetchSession(route.sid);
+      const m = data.manifest || {};
+      const payload = {
+        topic: m.topic || "",
+        moderator: m.moderator_agent || "claude",
+        sides: m.sides || [],
+      };
+      enterLiveView(payload, route.sid);
+    } catch (e) {
+      alert("couldn't open live view: " + e);
+      navigate("#/");
+    }
+  } else if (route.view === "archive") {
+    await openArchive(route.sid);
+  } else {
+    if (currentEventSource) {
+      currentEventSource.close();
+      currentEventSource = null;
+    }
+    showSetup();
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Sessions list + archive view
 // ---------------------------------------------------------------------------
+
+function _renderSessionCard(s) {
+  const sidesHtml = (s.sides || []).map(x =>
+    `<span class="sc-side"><code>${escapeHtml(x.role)}</code>${agentIcon(x.agent, {label: false})}</span>`
+  ).join("");
+  const statusCls = s.status === "done" ? "done"
+    : s.status === "running" || s.status === "starting" ? "running"
+    : s.status === "error" ? "error"
+    : s.status === "stale" ? "error"
+    : "idle";
+  const href = (s.status === "running" || s.status === "starting")
+    ? `#/live/${encodeURIComponent(s.session_id)}`
+    : `#/archive/${encodeURIComponent(s.session_id)}`;
+  return `
+    <a class="session-card" href="${href}" data-sid="${escapeHtml(s.session_id)}">
+      <div class="sc-head">
+        <code>${escapeHtml(s.session_id)}</code>
+        <span class="status ${statusCls}">${escapeHtml(s.status || "unknown")}</span>
+      </div>
+      <div class="sc-topic">${escapeHtml(s.topic || "(no manifest)")}</div>
+      <div class="sc-sub">${sidesHtml}</div>
+    </a>`;
+}
 
 async function loadSessions() {
   try {
     const r = await fetch("/api/sessions");
     const list = await r.json();
-    const wrap = el("sessions-list");
-    if (!list.length) {
-      wrap.innerHTML = `<p style="color:var(--muted);font-size:0.9rem">no prior debates yet</p>`;
-      return;
+    const running = list.filter(s => s.status === "running" || s.status === "starting");
+    const others = list.filter(s => !(s.status === "running" || s.status === "starting"));
+
+    const runningWrap = el("running-now");
+    if (running.length) {
+      runningWrap.hidden = false;
+      el("running-list").innerHTML = running.map(_renderSessionCard).join("");
+    } else {
+      runningWrap.hidden = true;
+      el("running-list").innerHTML = "";
     }
-    wrap.innerHTML = list.map(s => {
-      const sidesHtml = (s.sides || []).map(x =>
-        `<span class="sc-side"><code>${escapeHtml(x.role)}</code>${agentIcon(x.agent, {label: false})}</span>`
-      ).join("");
-      const statusCls = s.status === "done" ? "done"
-        : s.status === "running" ? "running"
-        : s.status === "error" ? "error" : "idle";
-      return `
-        <a class="session-card" href="#" data-sid="${escapeHtml(s.session_id)}">
-          <div class="sc-head">
-            <code>${escapeHtml(s.session_id)}</code>
-            <span class="status ${statusCls}">${escapeHtml(s.status || "unknown")}</span>
-          </div>
-          <div class="sc-topic">${escapeHtml(s.topic || "(no manifest)")}</div>
-          <div class="sc-sub">${sidesHtml}</div>
-        </a>`;
-    }).join("");
-    $$(".session-card", wrap).forEach(a => {
-      a.addEventListener("click", (e) => {
-        e.preventDefault();
-        openArchive(a.dataset.sid);
-      });
-    });
+
+    const wrap = el("sessions-list");
+    if (!others.length) {
+      wrap.innerHTML = `<p style="color:var(--muted);font-size:0.9rem">no prior debates yet</p>`;
+    } else {
+      wrap.innerHTML = others.map(_renderSessionCard).join("");
+    }
+    // Hash-based anchors navigate themselves on click; no JS handler needed.
   } catch (e) {
     console.warn("sessions load failed", e);
   }
 }
 
-async function openArchive(sid) {
+async function _fetchSession(sid) {
   const r = await fetch(`/api/sessions/${encodeURIComponent(sid)}`);
-  if (!r.ok) { alert("failed to load session"); return; }
-  const data = await r.json();
+  if (!r.ok) throw new Error(`failed to load session ${sid}: ${r.status}`);
+  return r.json();
+}
+
+async function openArchive(sid) {
+  let data;
+  try { data = await _fetchSession(sid); }
+  catch (e) { alert("failed to load session"); return; }
   const m = data.manifest || {};
   el("arc-sid").textContent = data.session_id;
   el("arc-topic").textContent = m.topic || "(no topic)";
@@ -318,7 +384,10 @@ async function submitDebate(ev) {
       return;
     }
     const { session_id } = await r.json();
-    enterLiveView(payload, session_id);
+    // Remember the payload so router() can skip the server round-trip.
+    CURRENT_PAYLOAD = payload;
+    CURRENT_SID = session_id;
+    navigate(`#/live/${encodeURIComponent(session_id)}`);
   } catch (e) {
     setStatus("error", "error");
     alert("Network error: " + e);
@@ -422,6 +491,10 @@ function handleEvent(ev) {
   switch (ev.type) {
     case "status":
       setStatus(ev.status, ev.status);
+      if (ev.status === "done" || ev.status === "error") {
+        // Keep the home page's lists fresh for when you go back.
+        loadSessions();
+      }
       break;
     case "session_ready":
       el("live-tmux").textContent = ev.tmux;
@@ -476,24 +549,22 @@ async function loadVersion() {
 
 document.addEventListener("DOMContentLoaded", () => {
   loadVersion();
-  loadAdapters().then(loadSessions);
   $("#setup-form").addEventListener("submit", submitDebate);
   el("add-side").addEventListener("click", () => addSide({ agent: ADAPTERS[0] }));
 
-  el("new-debate").addEventListener("click", () => {
-    if (currentEventSource) currentEventSource.close();
-    showSetup();
-  });
-  el("back-home").addEventListener("click", () => {
-    showSetup();
-  });
+  // Navigation — all three buttons just go home. The live debate keeps
+  // running server-side; returning to it via Running now / pasted URL
+  // re-attaches the SSE stream.
+  const goHome = () => navigate("#/");
+  el("new-debate").addEventListener("click", goHome);
+  el("back-home").addEventListener("click", goHome);
+  el("live-back").addEventListener("click", goHome);
 
-  // Clone from live view — reuse the last payload.
+  // Clone from live view — reuse the last payload, then go home.
   el("clone-live").addEventListener("click", () => {
     if (!CURRENT_PAYLOAD) return;
-    if (currentEventSource) currentEventSource.close();
     fillFormFrom(CURRENT_PAYLOAD);
-    showSetup();
+    navigate("#/");
   });
 
   // Clone from archive view — payload JSON is stashed on the button.
@@ -502,7 +573,13 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!raw) return;
     try {
       fillFormFrom(JSON.parse(raw));
-      showSetup();
+      navigate("#/");
     } catch (e) { /* ignore */ }
   });
+
+  window.addEventListener("hashchange", router);
+
+  // Boot: load adapters + sessions list, then run the router for the
+  // URL we landed on.
+  loadAdapters().then(() => { loadSessions(); router(); });
 });
