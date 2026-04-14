@@ -6,9 +6,13 @@ const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
 let ADAPTERS = [];
 let currentEventSource = null;
+let CURRENT_SID = null;
+let CURRENT_PAYLOAD = null;  // last-submitted payload, used for "Clone"
+
+const STORAGE_KEY = "aidebate:last-form";
 
 // ---------------------------------------------------------------------------
-// Setup phase
+// Small helpers
 // ---------------------------------------------------------------------------
 
 function escapeHtml(s) {
@@ -26,8 +30,24 @@ function renderMarkdown(text) {
   }
 }
 
-// Stable color per participant role. Cycles through a small palette so
-// the same role always gets the same bubble color within a session.
+// Agent icon — a small circular chip with a letter/glyph. Colors live in
+// CSS (.agent-chip.agent-<name>); new adapters get a generic fallback.
+const AGENT_GLYPHS = {
+  claude: "C",
+  gemini: "G",
+  codex: "</>",
+};
+function agentIcon(name, opts = {}) {
+  const glyph = AGENT_GLYPHS[name] || (name || "?").slice(0, 1).toUpperCase();
+  const cls = `agent-chip agent-${escapeHtml(name || "unknown")}`;
+  const label = opts.label === false ? "" :
+    `<span class="agent-name">${escapeHtml(name || "")}</span>`;
+  return `<span class="agent" title="${escapeHtml(name || "")}">
+            <span class="${cls}">${escapeHtml(glyph)}</span>${label}
+          </span>`;
+}
+
+// Stable color per participant role.
 const CHAT_PALETTE = [
   "#7cc4ff", "#b48aff", "#8fd18f", "#ffb170",
   "#ff8fa8", "#7ee6d4", "#d6c87a", "#9bb4ff",
@@ -60,16 +80,64 @@ function renderDebateInfo(payload) {
   const box = el("debate-info-body");
   const rows = (payload.sides || []).map(s =>
     `<tr><td><code>${escapeHtml(s.role)}</code></td>
-         <td><code>${escapeHtml(s.agent)}</code></td>
+         <td>${agentIcon(s.agent)}</td>
          <td>${escapeHtml(s.stance)}</td></tr>`
   ).join("");
+  const modAgent = payload.moderator || payload.moderator_agent || "";
   box.innerHTML = `
-    <p style="margin:0.3rem 0"><strong>Moderator:</strong> <code>${escapeHtml(payload.moderator || payload.moderator_agent || "")}</code></p>
+    <p style="margin:0.3rem 0"><strong>Moderator:</strong> ${agentIcon(modAgent)}</p>
     <table class="info-table">
       <thead><tr><th>role</th><th>agent</th><th>directions</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
 }
+
+// ---------------------------------------------------------------------------
+// Form persistence
+// ---------------------------------------------------------------------------
+
+function saveForm(payload) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+  } catch (e) { /* quota or private mode — ignore */ }
+}
+
+function loadSavedForm() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const p = JSON.parse(raw);
+    if (!p || !Array.isArray(p.sides) || p.sides.length < 2) return null;
+    return p;
+  } catch (e) { return null; }
+}
+
+// Fill the setup form from a payload-shaped object.
+// Also used by the "Clone" buttons in live/archive views.
+function fillFormFrom(payload) {
+  $("textarea[name=topic]").value = payload.topic || "";
+  el("moderator").value = payload.moderator || payload.moderator_agent || "claude";
+  el("sides").innerHTML = "";
+  for (const s of payload.sides || []) addSide(s);
+  if ((payload.sides || []).length < 2) {
+    while ($$("#sides .side-row").length < 2) {
+      addSide({ role: "", agent: ADAPTERS[0] || "claude", stance: "" });
+    }
+  }
+}
+
+function showSetup() {
+  el("setup").hidden = false;
+  el("live").hidden = true;
+  el("archive").hidden = true;
+  setStatus("idle", "idle");
+  window.scrollTo({ top: 0, behavior: "smooth" });
+  loadSessions();
+}
+
+// ---------------------------------------------------------------------------
+// Sessions list + archive view
+// ---------------------------------------------------------------------------
 
 async function loadSessions() {
   try {
@@ -81,7 +149,9 @@ async function loadSessions() {
       return;
     }
     wrap.innerHTML = list.map(s => {
-      const sides = (s.sides || []).map(x => `${x.role}@${x.agent}`).join(", ");
+      const sidesHtml = (s.sides || []).map(x =>
+        `<span class="sc-side"><code>${escapeHtml(x.role)}</code>${agentIcon(x.agent, {label: false})}</span>`
+      ).join("");
       const statusCls = s.status === "done" ? "done"
         : s.status === "running" ? "running"
         : s.status === "error" ? "error" : "idle";
@@ -92,7 +162,7 @@ async function loadSessions() {
             <span class="status ${statusCls}">${escapeHtml(s.status || "unknown")}</span>
           </div>
           <div class="sc-topic">${escapeHtml(s.topic || "(no manifest)")}</div>
-          <div class="sc-sub">${escapeHtml(sides)}</div>
+          <div class="sc-sub">${sidesHtml}</div>
         </a>`;
     }).join("");
     $$(".session-card", wrap).forEach(a => {
@@ -114,14 +184,14 @@ async function openArchive(sid) {
   el("arc-sid").textContent = data.session_id;
   el("arc-topic").textContent = m.topic || "(no topic)";
   el("arc-status").textContent = m.status || "unknown";
-  el("arc-moderator").textContent = m.moderator_agent || "?";
+  el("arc-moderator").innerHTML = agentIcon(m.moderator_agent || "");
   const sides = m.sides || [];
   el("arc-participants").innerHTML = sides.length
     ? `<table class="info-table">
          <thead><tr><th>role</th><th>agent</th><th>directions</th></tr></thead>
          <tbody>${sides.map(s =>
            `<tr><td><code>${escapeHtml(s.role)}</code></td>
-                <td><code>${escapeHtml(s.agent)}</code></td>
+                <td>${agentIcon(s.agent)}</td>
                 <td>${escapeHtml(s.stance)}</td></tr>`).join("")}</tbody>
        </table>`
     : "";
@@ -144,16 +214,28 @@ async function openArchive(sid) {
 
   el("arc-chat").innerHTML = renderChat(data.chat || []);
 
+  // Stash the manifest as a payload-shaped object so the Clone button can
+  // reuse it without re-fetching. Legacy sessions without a manifest get
+  // a no-op clone payload (shouldn't happen for new runs).
+  el("arc-clone").dataset.payload = JSON.stringify({
+    topic: m.topic || "",
+    moderator: m.moderator_agent || "claude",
+    sides: sides,
+  });
+
   el("setup").hidden = true;
   el("live").hidden = true;
   el("archive").hidden = false;
 }
 
+// ---------------------------------------------------------------------------
+// Setup form
+// ---------------------------------------------------------------------------
+
 async function loadAdapters() {
   const r = await fetch("/api/adapters");
   ADAPTERS = await r.json();
 
-  // Populate moderator select.
   const mod = el("moderator");
   mod.innerHTML = "";
   for (const a of ADAPTERS) {
@@ -162,9 +244,14 @@ async function loadAdapters() {
     opt.textContent = a;
     mod.appendChild(opt);
   }
-  // Default 2 participant rows.
-  addSide({ role: "pro", agent: ADAPTERS[0] || "claude", stance: "" });
-  addSide({ role: "con", agent: ADAPTERS[0] || "claude", stance: "" });
+
+  const saved = loadSavedForm();
+  if (saved) {
+    fillFormFrom(saved);
+  } else {
+    addSide({ role: "pro", agent: ADAPTERS[0] || "claude", stance: "" });
+    addSide({ role: "con", agent: ADAPTERS[0] || "claude", stance: "" });
+  }
 }
 
 function addSide(preset = {}) {
@@ -207,6 +294,7 @@ async function submitDebate(ev) {
     moderator: el("moderator").value,
     sides: collectSides(),
   };
+  saveForm(payload);
   setStatus("starting", "starting…");
   try {
     const r = await fetch("/api/debates", {
@@ -231,8 +319,6 @@ async function submitDebate(ev) {
 // ---------------------------------------------------------------------------
 // Live view
 // ---------------------------------------------------------------------------
-
-let CURRENT_SID = null;
 
 async function sendKeysTo(role, body) {
   if (!CURRENT_SID) return;
@@ -276,16 +362,17 @@ function paneControls(role) {
 function enterLiveView(payload, sessionId) {
   el("setup").hidden = true;
   el("live").hidden = false;
+  el("archive").hidden = true;
   el("live-topic").textContent = payload.topic;
   el("live-sid").textContent = sessionId;
   el("live-tmux").textContent = `debate-${sessionId}`;
   CURRENT_SID = sessionId;
+  CURRENT_PAYLOAD = payload;
   renderDebateInfo(payload);
   el("verdict-block").hidden = true;
   el("verdict-body").textContent = "";
   el("event-log").textContent = "";
 
-  // Build debater panes.
   const debaters = el("debaters");
   debaters.innerHTML = "";
   for (const s of payload.sides) {
@@ -293,17 +380,15 @@ function enterLiveView(payload, sessionId) {
     div.className = "pane";
     div.id = `pane-${s.role}`;
     div.innerHTML = `
-      <h3 class="pane-title">${s.role} · <span style="color:var(--muted);text-transform:none;font-weight:400">${s.agent}</span></h3>
+      <h3 class="pane-title">${escapeHtml(s.role)} ${agentIcon(s.agent)}</h3>
       <pre class="pane-body">waiting…</pre>
     `;
     div.appendChild(paneControls(s.role));
     debaters.appendChild(div);
   }
-  // Reset moderator pane.
   const mod = el("moderator-pane");
   $(".pane-body", mod).textContent = "waiting…";
-  $(".pane-title", mod).innerHTML = `moderator · <span style="color:var(--muted);text-transform:none;font-weight:400">${payload.moderator}</span>`;
-  // Ensure moderator has a controls row too.
+  $(".pane-title", mod).innerHTML = `moderator ${agentIcon(payload.moderator)}`;
   const existingCtrl = $(".pane-controls", mod);
   if (existingCtrl) existingCtrl.remove();
   mod.appendChild(paneControls("moderator"));
@@ -321,9 +406,7 @@ function subscribe(sessionId) {
     handleEvent(ev);
     logEvent(ev);
   };
-  es.onerror = () => {
-    // Connection will auto-reconnect; nothing to do.
-  };
+  es.onerror = () => {};
 }
 
 function handleEvent(ev) {
@@ -378,17 +461,30 @@ document.addEventListener("DOMContentLoaded", () => {
   loadAdapters().then(loadSessions);
   $("#setup-form").addEventListener("submit", submitDebate);
   el("add-side").addEventListener("click", () => addSide({ agent: ADAPTERS[0] }));
+
   el("new-debate").addEventListener("click", () => {
     if (currentEventSource) currentEventSource.close();
-    el("setup").hidden = false;
-    el("live").hidden = true;
-    el("archive").hidden = true;
-    setStatus("idle", "idle");
-    loadSessions();
+    showSetup();
   });
   el("back-home").addEventListener("click", () => {
-    el("archive").hidden = true;
-    el("setup").hidden = false;
-    loadSessions();
+    showSetup();
+  });
+
+  // Clone from live view — reuse the last payload.
+  el("clone-live").addEventListener("click", () => {
+    if (!CURRENT_PAYLOAD) return;
+    if (currentEventSource) currentEventSource.close();
+    fillFormFrom(CURRENT_PAYLOAD);
+    showSetup();
+  });
+
+  // Clone from archive view — payload JSON is stashed on the button.
+  el("arc-clone").addEventListener("click", () => {
+    const raw = el("arc-clone").dataset.payload;
+    if (!raw) return;
+    try {
+      fillFormFrom(JSON.parse(raw));
+      showSetup();
+    } catch (e) { /* ignore */ }
   });
 });
