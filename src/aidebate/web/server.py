@@ -287,7 +287,7 @@ def create_debate(payload: dict) -> dict:
 
     # Allocate session id up front (same format as the orchestrator) so the
     # caller can use it immediately for the SSE stream.
-    from orchestrator.session import new_session_id
+    from aidebate.core.session import new_session_id
     session_id = new_session_id()
     state = SessionState(
         session_id=session_id,

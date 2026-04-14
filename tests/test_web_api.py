@@ -81,3 +81,48 @@ def test_session_detail_404_for_unknown(sessions_dir: Path):
     client = TestClient(app)
     r = client.get("/api/sessions/does-not-exist")
     assert r.status_code == 404
+
+
+def test_create_debate_walks_import_path(sessions_dir: Path, monkeypatch):
+    """POST /api/debates should not explode on ModuleNotFoundError-style bugs.
+
+    We stub out run_debate and DebateSession.kill to avoid touching tmux,
+    then POST a valid payload. The handler imports `new_session_id` lazily,
+    so this exercises the import without actually spawning panes.
+    """
+    import aidebate.web.server as server
+
+    # Make the debate thread a no-op that just signals ready.
+    class _FakeSession:
+        def __init__(self, sid):
+            self.session_id = sid
+            from pathlib import Path as _P
+            self.root = _P(sessions_dir) / sid
+            self.root.mkdir(parents=True, exist_ok=True)
+            self.panes = {}
+        def kill(self): pass
+
+    def _fake_run(**kwargs):
+        sid = "2026-04-14-160000"
+        fs = _FakeSession(sid)
+        cb = kwargs.get("on_session_ready")
+        if cb:
+            cb(fs)
+        return fs
+
+    monkeypatch.setattr(server, "run_debate", _fake_run)
+
+    client = TestClient(app)
+    r = client.post(
+        "/api/debates",
+        json={
+            "topic": "is X better than Y?",
+            "moderator": "claude",
+            "sides": [
+                {"role": "pro", "agent": "claude", "stance": "yes"},
+                {"role": "con", "agent": "claude", "stance": "no"},
+            ],
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert "session_id" in r.json()
