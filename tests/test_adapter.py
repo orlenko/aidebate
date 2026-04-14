@@ -67,3 +67,21 @@ def test_custom_adapter_round_trip(tmp_path: Path):
 def test_missing_adapter_raises():
     with pytest.raises(FileNotFoundError):
         load_adapter("nope-not-real")
+
+
+def test_gemini_cmd_quotes_session_root():
+    """Sessions path may contain spaces (macOS user data dir does).
+
+    Gemini's cmd must quote the {session_root} placeholder so a spaced
+    path like '~/Library/Application Support/aidebate/sessions/...'
+    doesn't get shell-split into two arguments.
+    """
+    a = load_adapter("gemini")
+    formatted = a.cmd.format(
+        session_root="/Users/vorlenko/Library/Application Support/aidebate/sessions/s",
+        agent_cwd="/Users/vorlenko/Library/Application Support/aidebate/sessions/s/agents/pro",
+    )
+    # Every substituted path must live inside quotes.
+    assert "'/Users/vorlenko/Library/Application Support" in formatted
+    # No bare space outside quotes in the substituted region.
+    assert "--include-directories '/Users/" in formatted

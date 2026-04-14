@@ -1,5 +1,5 @@
 name: gemini
-cmd: "gemini --yolo --include-directories {session_root}"
+cmd: "gemini --yolo --include-directories '{session_root}'"
 submit_key: "Enter"
 submit_delay: 1.2
 permission_prompts:

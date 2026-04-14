@@ -102,7 +102,7 @@ def spawn_agent_pane(
     if not session.panes:
         # First agent: take over the window's initial pane.
         pane = window.active_pane
-        pane.send_keys(f"cd {agent_cwd}", enter=True)
+        pane.send_keys(f"cd '{agent_cwd}'", enter=True)
     else:
         # Subsequent agents: split.
         pane = window.split(
