@@ -22,6 +22,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from aidebate import __version__
 from aidebate.core.adapter import ADAPTERS_DIR
 from aidebate.core.debate import Side, run_debate
 from aidebate.core.session import DebateSession, sessions_root
@@ -246,6 +247,11 @@ def show_session(sid: str) -> dict:
             phases[phase_dir.name] = phase_entries
     result["phases"] = phases
     return result
+
+
+@app.get("/api/version")
+def get_version() -> dict:
+    return {"version": __version__}
 
 
 @app.get("/api/adapters")

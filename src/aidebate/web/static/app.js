@@ -466,7 +466,16 @@ function setStatus(cls, text) {
 // Boot
 // ---------------------------------------------------------------------------
 
+async function loadVersion() {
+  try {
+    const r = await fetch("/api/version");
+    const { version } = await r.json();
+    if (version) el("version").textContent = "v" + version;
+  } catch (e) { /* ignore */ }
+}
+
 document.addEventListener("DOMContentLoaded", () => {
+  loadVersion();
   loadAdapters().then(loadSessions);
   $("#setup-form").addEventListener("submit", submitDebate);
   el("add-side").addEventListener("click", () => addSide({ agent: ADAPTERS[0] }));
