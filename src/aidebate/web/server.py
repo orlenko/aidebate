@@ -40,6 +40,8 @@ class SessionState:
     topic: str
     sides: list[dict]  # serializable copy of sides
     moderator_agent: str
+    crossexam_wallclock: float = 300.0
+    crossexam_silence: float = 180.0
     debate_session: DebateSession | None = None
     thread: threading.Thread | None = None
     poller: threading.Thread | None = None
@@ -158,6 +160,8 @@ def _run_debate_thread(state: SessionState) -> None:
             topic=state.topic,
             sides=sides,
             moderator_agent=state.moderator_agent,
+            crossexam_wallclock=state.crossexam_wallclock,
+            crossexam_silence=state.crossexam_silence,
             on_session_ready=_on_ready,
         )
         state.status = "done"
@@ -315,11 +319,18 @@ def create_debate(payload: dict) -> dict:
     # caller can use it immediately for the SSE stream.
     from aidebate.core.session import new_session_id
     session_id = new_session_id()
+    try:
+        crossexam_wallclock = float(payload.get("crossexam_wallclock", 300.0))
+        crossexam_silence = float(payload.get("crossexam_silence", 180.0))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "crossexam_wallclock/silence must be numeric")
     state = SessionState(
         session_id=session_id,
         topic=topic,
         sides=sides,
         moderator_agent=moderator,
+        crossexam_wallclock=crossexam_wallclock,
+        crossexam_silence=crossexam_silence,
     )
 
     # Because run_debate allocates its own id, we use the state's sid only

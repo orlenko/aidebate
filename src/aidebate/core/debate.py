@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .adapter import load_adapter
+from .crossexam import install_chat_helper, run_crossexam
 from .pane import AgentPane
 from .phases import Task, run_parallel
 from .session import (
@@ -30,14 +31,36 @@ def _chat_blurb(chat_path: Path, role: str) -> str:
     return (
         "You share a group chat with the other debaters and the moderator at:\n"
         f"  {chat_path}\n\n"
-        "It is a JSONL file, one message per line. Format:\n"
-        '  {"ts":"<ISO8601>","from":"<role>","to":["<role>"|"*"],"text":"..."}\n\n'
-        f"Your role is: {role}. Before finalizing your answer, read the chat "
-        "tail and address anything aimed at you (`to` contains your role or "
-        '"*"). You may append short messages yourself — use `echo` with `>>`:\n'
-        f'  echo \'{{"ts":"<iso>","from":"{role}","to":["*"],"text":"..."}}\' >> {chat_path}\n'
-        "Keep chat messages short. Long-form reasoning goes in your answer file."
+        "To post a message, use the `chat-say` helper in your working "
+        "directory — it handles timestamps and JSON formatting for you:\n"
+        "  `./chat-say \"Your message here\"`                     (broadcast)\n"
+        "  `./chat-say --to <role> \"Directed message\"`           (targeted)\n"
+        "  `./chat-say --to <roleA>,<roleB> \"For two roles\"`     (multi)\n\n"
+        f"Your role is: {role}. Read the chat tail (e.g. "
+        f"`tail -n 40 {chat_path}`) before finalizing your answer, and "
+        "address anything aimed at you. Keep chat messages short (≤2 "
+        "sentences). Long-form reasoning goes in your answer file."
     )
+
+
+def _format_chat_transcript(chat_path: Path, limit: int | None = None) -> str:
+    if not chat_path.exists():
+        return "(no chat)"
+    lines = []
+    raw = chat_path.read_text().splitlines()
+    if limit is not None:
+        raw = raw[-limit:]
+    for line in raw:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            m = json.loads(line)
+        except Exception:
+            continue
+        to = ",".join(m.get("to") or []) or "*"
+        lines.append(f"[{m.get('ts','?')}] {m.get('from','?')} -> {to}: {m.get('text','')}")
+    return "\n".join(lines) if lines else "(no chat)"
 
 
 def _opening_prompt(topic: str, side: Side, chat_path: Path, all_roles: list[str]) -> str:
@@ -62,6 +85,7 @@ def _rebuttal_prompt(
     side: Side,
     openings: dict[str, str],
     chat_path: Path,
+    chat_transcript: str,
 ) -> str:
     opp_blocks = []
     for role, text in openings.items():
@@ -75,12 +99,17 @@ def _rebuttal_prompt(
         f"## Your stance\n{side.stance}\n\n"
         f"## Opponents' opening statements\n\n"
         + "\n\n".join(opp_blocks)
-        + "\n\n## Your task\n"
+        + "\n\n## Cross-examination transcript\n\n"
+        f"This is the group chat from the cross-examination phase.\n\n"
+        f"```\n{chat_transcript}\n```\n\n"
+        "## Your task\n"
         "Act as a hostile reviewer. For each opponent, identify the single "
         "most damaging flaw in their argument (factual error, logical gap, "
         "weak evidence, or unacknowledged counter-example) and exploit it. "
-        "End with a 1–2 sentence defense of any point of yours your opponents "
-        "are likely to attack. Keep it to ~300 words total.\n\n"
+        "**Reference specific moments from the cross-examination** — a dodged "
+        "question, a concession, a contradiction between their opening and "
+        "what they said in chat. End with a 1–2 sentence defense of any point "
+        "of yours your opponents are likely to attack. Keep it to ~300 words.\n\n"
         f"## Group chat\n{_chat_blurb(chat_path, side.role)}"
     )
 
@@ -91,6 +120,7 @@ def _verdict_prompt(
     openings: dict[str, str],
     rebuttals: dict[str, str],
     chat_path: Path,
+    chat_transcript: str,
     dropouts: list[dict] | None = None,
 ) -> str:
     side_blocks = []
@@ -119,7 +149,9 @@ def _verdict_prompt(
         "## Debater submissions\n\n"
         + "\n\n---\n\n".join(side_blocks)
         + dropout_note
-        + f"\n\n## Group chat transcript\nYou may also consult: {chat_path}\n\n"
+        + "\n\n## Cross-examination transcript\n\n"
+        f"```\n{chat_transcript}\n```\n\n"
+        f"(Full file on disk: {chat_path})\n\n"
         "## Your task\n"
         "You are the moderator. Render a reasoned verdict:\n\n"
         "1. **Winner** — which stance had the stronger case overall, and why "
@@ -140,6 +172,8 @@ def run_debate(
     moderator_agent: str = "claude",
     canary_timeout: float = 180.0,
     turn_timeout: float = 900.0,
+    crossexam_wallclock: float = 300.0,
+    crossexam_silence: float = 180.0,
     on_session_ready=None,  # callback(session) -> None, called after panes spawn
 ) -> DebateSession:
     session = create_session()
@@ -266,6 +300,12 @@ def run_debate(
             )
         return answers
 
+    # Install the `chat-say` helper in every surviving pane's cwd so agents
+    # can post to the group chat with a single shell call from any phase.
+    install_chat_helper(chat_path, moderator.cwd, "moderator")
+    for s in active_sides:
+        install_chat_helper(chat_path, panes[s.role].cwd, s.role)
+
     # Phase 1 — Opening (parallel)
     print(f"[debate] phase 1: opening (parallel, {len(active_sides)} debater(s))")
     openings = _run_phase(
@@ -276,28 +316,55 @@ def run_debate(
         ),
     )
 
-    # Phase 2 — Rebuttal (parallel)
+    # Phase 2 — Cross-examination (event-driven group chat)
+    # Needs at least two debaters to meaningfully cross-examine. With only
+    # one left, skip — there's nobody to question.
+    if len(active_sides) >= 2:
+        print(
+            f"[debate] phase 2: cross-examination "
+            f"(wallclock {crossexam_wallclock:.0f}s, silence {crossexam_silence:.0f}s, "
+            f"{len(active_sides)} debater(s))"
+        )
+        run_crossexam(
+            session_root=session.root,
+            chat_path=chat_path,
+            moderator=moderator,
+            debaters={s.role: panes[s.role] for s in active_sides},
+            stances={s.role: s.stance for s in active_sides},
+            topic=topic,
+            openings=openings,
+            wallclock=crossexam_wallclock,
+            silence_timeout=crossexam_silence,
+            turn_timeout=min(turn_timeout, 300.0),
+        )
+    else:
+        print("[debate] phase 2: skipped (only one debater left — nothing to cross-examine)")
+    chat_transcript = _format_chat_transcript(chat_path)
+
+    # Phase 3 — Rebuttal (parallel)
     # Only useful with 2+ surviving debaters; with 1 left, skip — there's
     # nothing to rebut.
     if len(active_sides) >= 2:
-        print(f"[debate] phase 2: rebuttal (parallel, {len(active_sides)} debater(s))")
+        print(f"[debate] phase 3: rebuttal (parallel, {len(active_sides)} debater(s))")
         rebuttals = _run_phase(
             "rebuttal",
-            session.root / "phase-2-rebuttal",
-            lambda s: _rebuttal_prompt(topic, s, openings, chat_path),
+            session.root / "phase-3-rebuttal",
+            lambda s: _rebuttal_prompt(topic, s, openings, chat_path, chat_transcript),
         )
     else:
-        print("[debate] phase 2: skipped (only one debater left — nothing to rebut)")
+        print("[debate] phase 3: skipped (only one debater left — nothing to rebut)")
         rebuttals = {}
 
-    # Phase 3 — Verdict (moderator)
-    print("[debate] phase 3: verdict (moderator)")
-    phase3_dir = session.root / "phase-3-verdict"
+    # Phase 4 — Verdict (moderator)
+    print("[debate] phase 4: verdict (moderator)")
+    phase4_dir = session.root / "phase-4-verdict"
+    # Re-read transcript in case new chat arrived during rebuttal.
+    chat_transcript = _format_chat_transcript(chat_path)
     verdict_text = run_turn(
         moderator,
-        phase3_dir,
+        phase4_dir,
         _verdict_prompt(
-            topic, active_sides, openings, rebuttals, chat_path,
+            topic, active_sides, openings, rebuttals, chat_path, chat_transcript,
             dropouts=manifest["dropouts"],
         ),
         timeout=turn_timeout,

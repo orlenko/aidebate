@@ -44,6 +44,7 @@ def test_rebuttal_prompt_includes_opponents_openings(tmp_path: Path):
         side=sides[0],
         openings=openings,
         chat_path=tmp_path / "chat.jsonl",
+        chat_transcript="",
     )
     # pro sees con's opening, not their own.
     assert "con's opening" in text
@@ -60,6 +61,7 @@ def test_verdict_prompt_includes_every_submission(tmp_path: Path):
         openings=openings,
         rebuttals=rebuttals,
         chat_path=tmp_path / "chat.jsonl",
+        chat_transcript="",
     )
     for needle in ("O-pro", "O-con", "R-pro", "R-con"):
         assert needle in text
@@ -75,6 +77,7 @@ def test_verdict_prompt_notes_dropouts(tmp_path: Path):
         openings={"pro": "opening"},
         rebuttals={},
         chat_path=tmp_path / "chat.jsonl",
+        chat_transcript="",
         dropouts=[
             {
                 "role": "con",
@@ -99,6 +102,7 @@ def test_verdict_prompt_no_dropout_section_when_empty(tmp_path: Path):
         openings={"pro": "O-pro", "con": "O-con"},
         rebuttals={"pro": "R-pro", "con": "R-con"},
         chat_path=tmp_path / "chat.jsonl",
+        chat_transcript="",
         dropouts=[],
     )
     # When no dropouts, the "Participants who dropped out" section should

@@ -142,6 +142,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             moderator_agent=args.moderator,
             canary_timeout=args.canary_timeout,
             turn_timeout=args.turn_timeout,
+            crossexam_wallclock=args.crossexam_wallclock,
+            crossexam_silence=args.crossexam_silence,
             on_session_ready=_on_ready,
         )
     except Exception as e:
@@ -238,6 +240,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sp.add_argument("--canary-timeout", type=float, default=180.0)
     sp.add_argument("--turn-timeout", type=float, default=900.0)
+    sp.add_argument(
+        "--crossexam-wallclock",
+        type=float,
+        default=300.0,
+        help="Max duration of the cross-examination phase, seconds (default: 300).",
+    )
+    sp.add_argument(
+        "--crossexam-silence",
+        type=float,
+        default=180.0,
+        help="End cross-exam after this many seconds of chat silence (default: 180).",
+    )
     sp.add_argument("--keep", action="store_true")
     sp.add_argument("--watch", action="store_true", help="Open a new terminal window attached to the session (macOS).")
     sp.add_argument("--no-wait", action="store_true", help="Don't pause for the user to attach before starting.")
