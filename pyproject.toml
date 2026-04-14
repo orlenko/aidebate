@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aidebate"
-version = "0.1.5"
+version = "0.1.6"
 description = "Multi-agent AI debate orchestrator — spawns Claude, Gemini, Codex (etc.) CLI agents in tmux panes and runs structured debates, with a web UI and archive browser."
 readme = "README.md"
 license = { text = "Apache-2.0" }
