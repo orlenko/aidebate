@@ -77,7 +77,7 @@ def canary_handshake(agent: AgentPane, timeout: float = 120.0) -> None:
 
     body = (
         "CANARY HANDSHAKE: This is a startup test. Write the single word 'ok' "
-        f"to {ready}, then touch {done}. Do not do anything else."
+        f"to '{ready}', then touch '{done}'. Do not do anything else."
     )
     # Wait for the CLI banner to settle AND for any adapter startup_keys
     # (e.g. "press Enter to dismiss trust dialog") to have fired and the
@@ -87,9 +87,11 @@ def canary_handshake(agent: AgentPane, timeout: float = 120.0) -> None:
         (sk.delay for sk in agent.adapter.startup_keys), default=0.0
     )
     # Generous minimum so the CLI is truly idle at its input prompt before
+    # we paste. Claude Code's cold start can take 5+ seconds on a fresh
+    # pane; 4s was marginal and one pane in three would miss the canary.
     # we paste into it. Claude Code in particular loads async and can miss
     # input sent too early.
-    time.sleep(max(max_startup_delay + 2.5, 4.0))
+    time.sleep(max(max_startup_delay + 2.5, 6.0))
     # Dismiss any startup dialogs (trust folder, workspace-add, etc.) that
     # appeared during the boot window, BEFORE we paste canary text.
     agent.handle_permission_prompts(duration=3.0)
