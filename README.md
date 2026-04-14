@@ -75,10 +75,10 @@ debate run \
 
 ## What gets saved
 
-Each run writes to a directory under the platform's user-data dir (macOS: `~/Library/Application Support/aidebate/sessions/`). Override with `AIDEBATE_HOME=<dir>` or `--sessions-dir <dir>`:
+Each run writes to `~/.aidebate/sessions/<id>/`. Override with `AIDEBATE_HOME=<dir>` or `--sessions-dir <dir>` on any subcommand. (We deliberately avoid macOS's `~/Library/Application Support/` path — the space breaks too many of the ad-hoc shell commands that AI agents emit mid-debate.)
 
 ```
-~/Library/Application Support/aidebate/sessions/2026-04-14-120000/
+~/.aidebate/sessions/2026-04-14-120000/
 ├── session.json                    # manifest: topic, sides, moderator, status, timings
 ├── chat.jsonl                      # group chat log (one JSON object per line)
 ├── verdict.md                      # moderator's final ruling

@@ -7,7 +7,6 @@ from datetime import datetime
 from pathlib import Path
 
 import libtmux
-import platformdirs
 
 from .adapter import Adapter
 from .pane import AgentPane
@@ -16,19 +15,21 @@ from .pane import AgentPane
 def sessions_root() -> Path:
     """Where per-debate artifacts live on disk.
 
-    Resolution order:
-      1. AIDEBATE_HOME env var → <AIDEBATE_HOME>/sessions/
-      2. platformdirs user_data_dir — on macOS this is
-         ~/Library/Application Support/aidebate/sessions.
+    Default: ~/.aidebate/sessions/ — a dotfile in the user's home. We
+    deliberately avoid platformdirs' macOS choice of
+    "~/Library/Application Support/aidebate" because the embedded space
+    breaks the dozens of shell commands AI agents emit during a debate
+    (touch, cd, printf > path, echo >> path, etc.), and not every agent
+    quotes its arguments consistently. ~/.aidebate is conventional Unix,
+    space-free, persistent, and cheap to discover.
+
+    Override with the AIDEBATE_HOME env var or the --sessions-dir flag
+    on any subcommand.
 
     Creating the directory is the caller's responsibility.
     """
     override = os.environ.get("AIDEBATE_HOME")
-    base = (
-        Path(override).expanduser()
-        if override
-        else Path(platformdirs.user_data_dir("aidebate"))
-    )
+    base = Path(override).expanduser() if override else Path.home() / ".aidebate"
     return base / "sessions"
 
 

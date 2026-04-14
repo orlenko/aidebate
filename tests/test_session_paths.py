@@ -24,6 +24,7 @@ def test_sessions_root_honours_aidebate_home(sessions_dir: Path):
 def test_sessions_root_default_without_env(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("AIDEBATE_HOME", raising=False)
     root = sessions_root()
-    # Landing somewhere platform-appropriate that mentions aidebate is enough.
-    assert "aidebate" in str(root)
-    assert root.name == "sessions"
+    assert root == Path.home() / ".aidebate" / "sessions"
+    # Must not contain spaces — AI agents emit unquoted shell commands
+    # that shell-split on spaces and cause subtle failures.
+    assert " " not in str(root)
