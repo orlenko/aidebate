@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>debate</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header>
+    <h1>debate</h1>
+    <div id="status" class="status idle">idle</div>
+  </header>
+
+  <!-- ================= SETUP ================= -->
+  <section id="setup">
+    <h2>Start a debate</h2>
+    <form id="setup-form">
+      <label>
+        Topic
+        <textarea name="topic" rows="2" required
+          placeholder="e.g. Should a small startup build their CLI tools in Rust or Go?"></textarea>
+      </label>
+
+      <label>
+        Moderator
+        <select name="moderator" id="moderator"></select>
+      </label>
+
+      <fieldset>
+        <legend>Participants</legend>
+        <div id="sides"></div>
+        <button type="button" id="add-side">+ add participant</button>
+      </fieldset>
+
+      <button type="submit">Start debate</button>
+    </form>
+
+    <h2 style="margin-top:2rem">Prior debates</h2>
+    <div id="sessions-list">
+      <p style="color:var(--muted);font-size:0.9rem">loading…</p>
+    </div>
+  </section>
+
+  <!-- ================= LIVE VIEW ================= -->
+  <section id="live" hidden>
+    <div class="meta">
+      <div><strong>topic:</strong> <span id="live-topic"></span></div>
+      <div><strong>session:</strong> <code id="live-sid"></code></div>
+      <div><strong>tmux:</strong> <code id="live-tmux">–</code></div>
+    </div>
+
+    <details id="debate-info" open>
+      <summary>Debate info</summary>
+      <div id="debate-info-body"></div>
+    </details>
+
+    <div id="panes" class="panes">
+      <!-- moderator on the left, debaters stacked on the right -->
+      <div id="moderator-pane" class="pane moderator">
+        <h3 class="pane-title">moderator</h3>
+        <pre class="pane-body">waiting…</pre>
+      </div>
+      <div id="debaters"></div>
+    </div>
+
+    <details id="verdict-block" hidden>
+      <summary>Verdict</summary>
+      <pre id="verdict-body"></pre>
+    </details>
+
+    <details>
+      <summary>Event log</summary>
+      <pre id="event-log"></pre>
+    </details>
+
+    <button id="new-debate">Start another</button>
+  </section>
+
+  <!-- ================= ARCHIVED SESSION VIEW ================= -->
+  <section id="archive" hidden>
+    <button id="back-home">← back</button>
+    <h2 id="arc-topic"></h2>
+    <div class="meta">
+      <div><strong>session:</strong> <code id="arc-sid"></code></div>
+      <div><strong>status:</strong> <span id="arc-status"></span></div>
+      <div><strong>moderator:</strong> <span id="arc-moderator"></span></div>
+    </div>
+    <div id="arc-participants"></div>
+    <details id="arc-verdict-block" open>
+      <summary>Verdict</summary>
+      <div id="arc-verdict" class="md"></div>
+    </details>
+    <details open>
+      <summary>Phase answers</summary>
+      <div id="arc-phases"></div>
+    </details>
+    <details>
+      <summary>Group chat</summary>
+      <div id="arc-chat" class="chat"></div>
+    </details>
+  </section>
+
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

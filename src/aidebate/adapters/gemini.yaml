@@ -1,0 +1,37 @@
+name: gemini
+cmd: "gemini --yolo --include-directories {session_root}"
+submit_key: "Enter"
+submit_delay: 1.2
+permission_prompts:
+  # gemini's --include-directories trust dialog has numbered options; pick 1
+  # explicitly so we don't depend on the highlighted default surviving any
+  # stray keystrokes. Same for the folder-trust dialog.
+  - { match: "Do you trust the following", respond: "1" }
+  - { match: "Do you trust",               respond: "1" }
+  - { match: "Trust folder",               respond: "1" }
+  - { match: "\\[y/N\\]",                  respond: "y" }
+  - { match: "\\(y/n\\)",                  respond: "y" }
+  - { match: "Allow",                      respond: "y" }
+# Gemini shows two sequential startup modals on a fresh folder:
+#   1. "We're making changes to Gemini CLI that may impact your workflow…"
+#   2. "Do you trust the files in this folder?" (default highlights "Trust folder")
+# Each needs its own Enter; a single Enter only dismisses the first and the
+# trust dialog then absorbs the canary text. Fire two Enters a couple seconds
+# apart — canary timing already waits for the latest startup key plus a buffer.
+startup_keys:
+  - { delay: 3.0, key: "Enter" }
+  - { delay: 5.0, key: "Enter" }
+answer_instruction: |
+  IMPORTANT: When you have finished this task, write your full response
+  to this file (the path may contain spaces — preserve it exactly):
+
+      {answer_path}
+
+  Then signal completion by running this command verbatim (including
+  the single quotes — they protect any spaces in the path):
+
+      touch '{done_path}'
+
+  Do not print the answer to this terminal. Do not proceed past this
+  task until both files exist on disk. After touching the done file,
+  you may stop.

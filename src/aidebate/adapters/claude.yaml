@@ -1,0 +1,22 @@
+name: claude
+cmd: "claude --dangerously-skip-permissions"
+submit_key: "Enter"
+permission_prompts:
+  - { match: "Allow edits to",    respond: "y" }
+  - { match: "Trust this folder", respond: "y" }
+  - { match: "\\[y/N\\]",         respond: "y" }
+  - { match: "\\(y/n\\)",         respond: "y" }
+answer_instruction: |
+  IMPORTANT: When you have finished this task, write your full response
+  to this file (the path may contain spaces — preserve it exactly):
+
+      {answer_path}
+
+  Then signal completion by running this command verbatim (including
+  the single quotes — they protect any spaces in the path):
+
+      touch '{done_path}'
+
+  Do not print the answer to this terminal. Do not proceed past this
+  task until both files exist on disk. After touching the done file,
+  you may stop.

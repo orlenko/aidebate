@@ -1,0 +1,73 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "aidebate"
+version = "0.1.0"
+description = "Multi-agent AI debate orchestrator — spawns Claude, Gemini, Codex (etc.) CLI agents in tmux panes and runs structured debates, with a web UI and archive browser."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Vlad Orlenko" }]
+requires-python = ">=3.10"
+keywords = ["ai", "llm", "debate", "multi-agent", "claude", "gemini", "codex", "tmux"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Environment :: Web Environment",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development",
+]
+dependencies = [
+    "libtmux>=0.35",
+    "pyyaml>=6.0",
+    "watchdog>=4.0",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "platformdirs>=4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.27",  # fastapi TestClient needs httpx
+    "ruff>=0.5",
+]
+
+[project.scripts]
+debate = "aidebate.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/orlenko/aidebate"
+Issues = "https://github.com/orlenko/aidebate/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aidebate"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/aidebate",
+    "tests",
+    "README.md",
+    "LICENSE",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]  # line length is advisory
