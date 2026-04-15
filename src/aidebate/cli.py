@@ -8,6 +8,7 @@ Subcommands:
   attach ID   Print the tmux attach command for a session.
   kill-all    Kill every tmux session whose name starts with 'debate-'.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -45,7 +46,9 @@ def cmd_smoke(args: argparse.Namespace) -> int:
 
     if args.watch:
         if not open_in_new_terminal(tmux_name):
-            print(f"[debate] couldn't auto-open a terminal; attach manually: tmux attach -t {tmux_name}")
+            print(
+                f"[debate] couldn't auto-open a terminal; attach manually: tmux attach -t {tmux_name}"
+            )
     if args.no_wait:
         print(f"[debate] attach with: tmux attach -t {tmux_name}")
     else:
@@ -96,9 +99,7 @@ def parse_side(spec: str, default_agent: str = "claude") -> Side:
         rustacean@codex:"Rust wins on safety" -> role=rustacean, agent=codex
     """
     if ":" not in spec:
-        raise argparse.ArgumentTypeError(
-            f"--side must be ROLE[@AGENT]:STANCE, got: {spec!r}"
-        )
+        raise argparse.ArgumentTypeError(f"--side must be ROLE[@AGENT]:STANCE, got: {spec!r}")
     head, stance = spec.split(":", 1)
     head = head.strip()
     stance = stance.strip()
@@ -108,9 +109,7 @@ def parse_side(spec: str, default_agent: str = "claude") -> Side:
     else:
         role, agent = head, default_agent
     if not role or not stance or not agent:
-        raise argparse.ArgumentTypeError(
-            f"empty role/agent/stance in --side {spec!r}"
-        )
+        raise argparse.ArgumentTypeError(f"empty role/agent/stance in --side {spec!r}")
     return Side(role=role, stance=stance, agent=agent)
 
 
@@ -129,7 +128,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         tmux_name = f"debate-{session.session_id}"
         if args.watch:
             if not open_in_new_terminal(tmux_name):
-                print(f"[debate] couldn't auto-open a terminal; attach manually: tmux attach -t {tmux_name}")
+                print(
+                    f"[debate] couldn't auto-open a terminal; attach manually: tmux attach -t {tmux_name}"
+                )
         if args.no_wait:
             print(f"[debate] attach with: tmux attach -t {tmux_name}")
         else:
@@ -144,6 +145,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             turn_timeout=args.turn_timeout,
             crossexam_wallclock=args.crossexam_wallclock,
             crossexam_silence=args.crossexam_silence,
+            roast=not args.no_roast,
             on_session_ready=_on_ready,
         )
     except Exception as e:
@@ -252,9 +254,20 @@ def build_parser() -> argparse.ArgumentParser:
         default=180.0,
         help="End cross-exam after this many seconds of chat silence (default: 180).",
     )
+    sp.add_argument(
+        "--no-roast",
+        action="store_true",
+        help="Skip the post-verdict roastmaster phase (default: roast is on).",
+    )
     sp.add_argument("--keep", action="store_true")
-    sp.add_argument("--watch", action="store_true", help="Open a new terminal window attached to the session (macOS).")
-    sp.add_argument("--no-wait", action="store_true", help="Don't pause for the user to attach before starting.")
+    sp.add_argument(
+        "--watch",
+        action="store_true",
+        help="Open a new terminal window attached to the session (macOS).",
+    )
+    sp.add_argument(
+        "--no-wait", action="store_true", help="Don't pause for the user to attach before starting."
+    )
     _add_sessions_dir(sp)
     sp.set_defaults(func=cmd_run)
 
@@ -263,9 +276,15 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--topic", default="Rust vs Go for building small CLI tools.")
     sp.add_argument("--canary-timeout", type=float, default=120.0)
     sp.add_argument("--turn-timeout", type=float, default=600.0)
-    sp.add_argument("--keep", action="store_true", help="Leave tmux session running after completion.")
-    sp.add_argument("--watch", action="store_true", help="Open a new terminal window attached to the session.")
-    sp.add_argument("--no-wait", action="store_true", help="Don't pause for the user to attach before starting.")
+    sp.add_argument(
+        "--keep", action="store_true", help="Leave tmux session running after completion."
+    )
+    sp.add_argument(
+        "--watch", action="store_true", help="Open a new terminal window attached to the session."
+    )
+    sp.add_argument(
+        "--no-wait", action="store_true", help="Don't pause for the user to attach before starting."
+    )
     _add_sessions_dir(sp)
     sp.set_defaults(func=cmd_smoke)
 

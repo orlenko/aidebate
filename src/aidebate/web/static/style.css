@@ -70,6 +70,21 @@ form label {
   font-size: 0.9rem;
 }
 
+form label.checkbox {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.8rem 0;
+}
+form label.checkbox input { width: auto; margin: 0; }
+form label.checkbox .hint {
+  flex-basis: 100%;
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin-left: 1.5rem;
+}
+
 form textarea, form input[type="text"], form select {
   display: block;
   width: 100%;

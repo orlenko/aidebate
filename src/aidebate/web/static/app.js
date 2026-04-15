@@ -117,6 +117,8 @@ function loadSavedForm() {
 function fillFormFrom(payload) {
   $("textarea[name=topic]").value = payload.topic || "";
   el("moderator").value = payload.moderator || payload.moderator_agent || "claude";
+  // `roast` defaults to true; only a literal `false` ticks the opt-out.
+  el("no-roast").checked = payload.roast === false;
   el("sides").innerHTML = "";
   for (const s of payload.sides || []) addSide(s);
   if ((payload.sides || []).length < 2) {
@@ -164,6 +166,7 @@ async function router() {
         topic: m.topic || "",
         moderator: m.moderator_agent || "claude",
         sides: m.sides || [],
+        roast: m.roast_enabled !== false,
       };
       enterLiveView(payload, route.sid);
     } catch (e) {
@@ -272,6 +275,8 @@ async function openArchive(sid) {
     : "";
   el("arc-verdict").innerHTML = data.verdict ? renderMarkdown(data.verdict) : "";
   el("arc-verdict-block").hidden = !data.verdict;
+  el("arc-roast").innerHTML = data.roast ? renderMarkdown(data.roast) : "";
+  el("arc-roast-block").hidden = !data.roast;
 
   const phases = data.phases || {};
   el("arc-phases").innerHTML = Object.keys(phases).sort().map(ph => {
@@ -296,6 +301,7 @@ async function openArchive(sid) {
     topic: m.topic || "",
     moderator: m.moderator_agent || "claude",
     sides: sides,
+    roast: m.roast_enabled !== false,
   });
 
   el("setup").hidden = true;
@@ -368,6 +374,7 @@ async function submitDebate(ev) {
     topic: $("textarea[name=topic]").value.trim(),
     moderator: el("moderator").value,
     sides: collectSides(),
+    roast: !el("no-roast").checked,
   };
   saveForm(payload);
   setStatus("starting", "starting…");
@@ -449,6 +456,8 @@ function enterLiveView(payload, sessionId) {
   renderDebateInfo(payload);
   el("verdict-block").hidden = true;
   el("verdict-body").textContent = "";
+  el("roast-block").hidden = true;
+  el("roast-body").innerHTML = "";
   el("event-log").textContent = "";
 
   const debaters = el("debaters");
@@ -463,6 +472,17 @@ function enterLiveView(payload, sessionId) {
     `;
     div.appendChild(paneControls(s.role));
     debaters.appendChild(div);
+  }
+  if (payload.roast !== false) {
+    const roastDiv = document.createElement("div");
+    roastDiv.className = "pane";
+    roastDiv.id = "pane-roastmaster";
+    roastDiv.innerHTML = `
+      <h3 class="pane-title">🔥 roastmaster ${agentIcon("claude")}</h3>
+      <pre class="pane-body">idle — waiting for verdict…</pre>
+    `;
+    roastDiv.appendChild(paneControls("roastmaster"));
+    debaters.appendChild(roastDiv);
   }
   const mod = el("moderator-pane");
   $(".pane-body", mod).textContent = "waiting…";
@@ -510,6 +530,10 @@ function handleEvent(ev) {
     case "verdict":
       el("verdict-block").hidden = false;
       el("verdict-body").textContent = ev.content;
+      break;
+    case "roast":
+      el("roast-block").hidden = false;
+      el("roast-body").innerHTML = renderMarkdown(ev.content || "");
       break;
     case "error":
       setStatus("error", "error: " + (ev.message || ""));

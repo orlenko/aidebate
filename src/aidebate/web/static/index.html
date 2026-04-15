@@ -32,6 +32,12 @@
         <button type="button" id="add-side">+ add participant</button>
       </fieldset>
 
+      <label class="checkbox">
+        <input type="checkbox" name="no_roast" id="no-roast" />
+        Do not roast — skip the post-verdict roastmaster phase
+        <span class="hint">(the roast is foul-mouthed and spares nobody; opt out if this debate is sombre)</span>
+      </label>
+
       <button type="submit">Start debate</button>
     </form>
 
@@ -76,6 +82,11 @@
       <pre id="verdict-body"></pre>
     </details>
 
+    <details id="roast-block" hidden open>
+      <summary>🔥 Roast</summary>
+      <div id="roast-body" class="md"></div>
+    </details>
+
     <details>
       <summary>Event log</summary>
       <pre id="event-log"></pre>
@@ -103,6 +114,10 @@
     <details id="arc-verdict-block" open>
       <summary>Verdict</summary>
       <div id="arc-verdict" class="md"></div>
+    </details>
+    <details id="arc-roast-block" open hidden>
+      <summary>🔥 Roast</summary>
+      <div id="arc-roast" class="md"></div>
     </details>
     <details open>
       <summary>Phase answers</summary>

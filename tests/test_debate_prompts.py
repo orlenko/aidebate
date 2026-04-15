@@ -7,6 +7,7 @@ from aidebate.core.debate import (
     Side,
     _opening_prompt,
     _rebuttal_prompt,
+    _roast_prompt,
     _verdict_prompt,
 )
 
@@ -109,3 +110,24 @@ def test_verdict_prompt_no_dropout_section_when_empty(tmp_path: Path):
     # not appear at all — moderator shouldn't have to reason about an
     # empty absentee list.
     assert "dropped out" not in text
+
+
+def test_roast_prompt_includes_everyone_and_transcript():
+    sides = _sides()
+    text = _roast_prompt(
+        topic="X",
+        sides=sides,
+        openings={"pro": "O-pro", "con": "O-con"},
+        rebuttals={"pro": "R-pro", "con": "R-con"},
+        verdict_text="V-final",
+        chat_transcript="chat-lines",
+        moderator_agent="claude",
+    )
+    # Every submission + the verdict must be in the prompt.
+    for needle in ("O-pro", "O-con", "R-pro", "R-con", "V-final", "chat-lines"):
+        assert needle in text
+    # Every participant, including the moderator, must be listed.
+    assert "pro" in text and "con" in text and "moderator" in text
+    # Roastmaster is told to follow CLAUDE.md (i.e. the tone sits in the
+    # per-agent working directory, not re-pasted into every prompt).
+    assert "CLAUDE.md" in text

@@ -42,12 +42,14 @@ class SessionState:
     moderator_agent: str
     crossexam_wallclock: float = 300.0
     crossexam_silence: float = 180.0
+    roast: bool = True
     debate_session: DebateSession | None = None
     thread: threading.Thread | None = None
     poller: threading.Thread | None = None
     status: str = "starting"  # starting, running, done, error
     error: str | None = None
     verdict: str | None = None
+    roast: str | None = None
     events: list[dict] = field(default_factory=list)
     subscribers: list[queue.Queue] = field(default_factory=list)
     _lock: threading.Lock = field(default_factory=threading.Lock)
@@ -162,6 +164,7 @@ def _run_debate_thread(state: SessionState) -> None:
             moderator_agent=state.moderator_agent,
             crossexam_wallclock=state.crossexam_wallclock,
             crossexam_silence=state.crossexam_silence,
+            roast=state.roast,
             on_session_ready=_on_ready,
         )
         state.status = "done"
@@ -169,6 +172,10 @@ def _run_debate_thread(state: SessionState) -> None:
         if verdict_path.exists():
             state.verdict = verdict_path.read_text()
             state.emit({"type": "verdict", "content": state.verdict})
+        roast_path = session.root / "roast.md"
+        if roast_path.exists():
+            state.roast = roast_path.read_text()
+            state.emit({"type": "roast", "content": state.roast})
         state.emit({"type": "status", "status": "done"})
     except Exception as e:
         state.status = "error"
@@ -250,6 +257,9 @@ def show_session(sid: str) -> dict:
     verdict = d / "verdict.md"
     if verdict.exists():
         result["verdict"] = verdict.read_text()
+    roast = d / "roast.md"
+    if roast.exists():
+        result["roast"] = roast.read_text()
     chat = d / "chat.jsonl"
     if chat.exists():
         try:
@@ -331,6 +341,7 @@ def create_debate(payload: dict) -> dict:
         moderator_agent=moderator,
         crossexam_wallclock=crossexam_wallclock,
         crossexam_silence=crossexam_silence,
+        roast=bool(payload.get("roast", True)),
     )
 
     # Because run_debate allocates its own id, we use the state's sid only
