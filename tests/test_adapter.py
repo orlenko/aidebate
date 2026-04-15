@@ -17,6 +17,7 @@ def test_shipped_adapters_load():
         assert a.cmd
         assert a.submit_delay >= 0
         assert isinstance(a.permission_prompts, list)
+        assert isinstance(a.ready_patterns, list)
         assert isinstance(a.startup_keys, list)
 
 
@@ -35,6 +36,19 @@ def test_gemini_adapter_has_two_startup_enters():
     assert all(k.key == "Enter" for k in a.startup_keys)
     delays = sorted(k.delay for k in a.startup_keys)
     assert delays[1] > delays[0]
+
+
+def test_gemini_adapter_has_ready_pattern():
+    a = load_adapter("gemini")
+    assert any(p.search("Type your message or @path/to/file") for p in a.ready_patterns)
+
+
+def test_gemini_trust_dialog_matches_one_permission_pattern():
+    a = load_adapter("gemini")
+    dialog = "Do you trust the files in this folder?\n1. Trust folder\n2. Don't trust"
+    matches = [p for p in a.permission_prompts if p.match.search(dialog)]
+    assert len(matches) == 1
+    assert matches[0].respond == ""
 
 
 def test_custom_adapter_round_trip(tmp_path: Path):
@@ -61,6 +75,7 @@ def test_custom_adapter_round_trip(tmp_path: Path):
     assert a.submit_delay == 0.5
     assert len(a.permission_prompts) == 1
     assert a.permission_prompts[0].match.search("yes/no") is not None
+    assert a.ready_patterns == []
     assert [(k.delay, k.key) for k in a.startup_keys] == [(1.0, "Space"), (2.5, "Enter")]
 
 

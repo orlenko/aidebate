@@ -5,13 +5,19 @@ submit_delay: 1.2
 permission_prompts:
   # gemini's --include-directories trust dialog has numbered options; pick 1
   # explicitly so we don't depend on the highlighted default surviving any
-  # stray keystrokes. Same for the folder-trust dialog.
+  # stray keystrokes. For the interactive folder-trust modal, however,
+  # typing "1" can survive the restart and leak into the composer, so use
+  # Enter there instead.
   - { match: "Do you trust the following", respond: "1" }
-  - { match: "Do you trust",               respond: "1" }
-  - { match: "Trust folder",               respond: "1" }
+  - { match: "Do you trust",               respond: "" }
   - { match: "\\[y/N\\]",                  respond: "y" }
   - { match: "\\(y/n\\)",                  respond: "y" }
   - { match: "Allow",                      respond: "y" }
+ready_patterns:
+  # Gemini's startup can linger on update/trust banners after the fixed
+  # startup key timings. Wait for its actual composer UI before sending
+  # the canary or later turn prompts.
+  - "Type your message or @path/to/file"
 # Gemini shows two sequential startup modals on a fresh folder:
 #   1. "We're making changes to Gemini CLI that may impact your workflow…"
 #   2. "Do you trust the files in this folder?" (default highlights "Trust folder")

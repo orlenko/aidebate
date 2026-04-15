@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+cd "$ROOT"
+
+BASE_BRANCH=${1:-main}
+if ! git rev-parse --verify "$BASE_BRANCH" >/dev/null 2>&1; then
+  echo "Base branch '$BASE_BRANCH' does not exist." >&2
+  exit 1
+fi
+
+MERGE_BASE=$(git merge-base HEAD "$BASE_BRANCH")
+TOTAL_LINES=$(git diff --numstat "$MERGE_BASE..HEAD" | awk '{sum += $1 + $2} END {print sum+0}')
+CURRENT_SHA=$(git rev-parse HEAD)
+MARKER=".hostile-eyes-last"
+
+echo "Base branch: $BASE_BRANCH"
+echo "Merge base:  $MERGE_BASE"
+echo "Changed lines: $TOTAL_LINES"
+
+if [[ "$TOTAL_LINES" -le 10 ]]; then
+  echo "Trivial diff. No hostile-eyes gate."
+  exit 0
+fi
+
+if [[ ! -f "$MARKER" ]]; then
+  echo "Missing hostile-eyes marker: $MARKER" >&2
+  echo "Run: scripts/hostile-eyes $BASE_BRANCH" >&2
+  exit 2
+fi
+
+MARKER_SHA=$(tr -d '[:space:]' < "$MARKER")
+if [[ "$MARKER_SHA" != "$CURRENT_SHA" ]]; then
+  echo "Hostile-eyes marker is stale for HEAD $CURRENT_SHA" >&2
+  echo "Run: scripts/hostile-eyes $BASE_BRANCH" >&2
+  exit 2
+fi
+
+echo "Hostile-eyes marker matches HEAD."

@@ -146,6 +146,9 @@ The adapter's `cmd` can reference `{session_root}` and `{agent_cwd}`, substitute
 ```sh
 .venv/bin/pytest                # run the test suite
 .venv/bin/ruff check src tests  # lint
+scripts/hostile-eyes            # adversarial self-review + mark current HEAD
+scripts/pre-pr-check            # fail fast if hostile review is missing
+scripts/restart-server          # bounce the local web server on :8765
 ```
 
 The tests don't require `tmux` or any AI CLI — they cover adapter loading, side parsing, prompt building, and the FastAPI endpoints that read session state from disk. For end-to-end runs you need the real thing.

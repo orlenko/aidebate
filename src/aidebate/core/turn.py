@@ -46,6 +46,9 @@ def run_turn(
     # Dismiss any lingering permission dialogs BEFORE we paste, so our
     # text lands in the real input box instead of a dialog.
     agent.handle_permission_prompts(duration=2.0)
+    agent.wait_until_ready(timeout=8.0)
+    agent.handle_permission_prompts(duration=2.0)
+    agent.wait_until_ready(timeout=6.0)
     agent.send_text(trigger)
     # And again after — new prompts can appear in response to the paste.
     agent.handle_permission_prompts(duration=3.0)
@@ -95,6 +98,9 @@ def canary_handshake(agent: AgentPane, timeout: float = 120.0) -> None:
     # Dismiss any startup dialogs (trust folder, workspace-add, etc.) that
     # appeared during the boot window, BEFORE we paste canary text.
     agent.handle_permission_prompts(duration=3.0)
+    agent.wait_until_ready(timeout=max(max_startup_delay + 8.0, 12.0))
+    agent.handle_permission_prompts(duration=2.0)
+    agent.wait_until_ready(timeout=6.0)
     agent.send_text(body)
     agent.handle_permission_prompts(duration=5.0)
 

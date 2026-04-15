@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+cd "$ROOT"
+
+BASE_BRANCH=${1:-main}
+if ! git rev-parse --verify "$BASE_BRANCH" >/dev/null 2>&1; then
+  echo "Base branch '$BASE_BRANCH' does not exist." >&2
+  exit 1
+fi
+
+MERGE_BASE=$(git merge-base HEAD "$BASE_BRANCH")
+DIFFSTAT=$(git diff --stat "$MERGE_BASE")
+CHANGED=$(git diff --name-only "$MERGE_BASE")
+UNTRACKED=$(git ls-files --others --exclude-standard)
+MARKER=".hostile-eyes-last"
+
+cat <<EOF
+Hostile Eyes
+
+Base branch: $BASE_BRANCH
+Merge base:  $MERGE_BASE
+
+Changed files:
+$CHANGED
+
+Untracked files:
+$UNTRACKED
+
+Diffstat:
+$DIFFSTAT
+
+Checklist
+
+1. Re-read the original request. List the actual requirements.
+2. Compare requirements to the diff. Mark anything missing, partial, or unasked-for.
+3. Audit tests. Would they fail on regression, or just bless the current helpers?
+4. Hunt shortcuts: swallowed exceptions, racey sleeps, dead code, boundary validation holes.
+5. Identify what should shrink or disappear.
+6. For aidebate:
+   - canary coverage intact?
+   - dropout handling intact?
+   - legacy manifest fields still tolerated?
+   - risky path actually smoke-tested?
+
+Diff:
+EOF
+
+git diff "$MERGE_BASE"
+if [[ -n "$UNTRACKED" ]]; then
+  echo
+  echo "Untracked file contents:"
+  while IFS= read -r path; do
+    [[ -z "$path" ]] && continue
+    echo
+    echo "--- $path ---"
+    sed -n '1,220p' "$path"
+  done <<< "$UNTRACKED"
+fi
+git rev-parse HEAD > "$MARKER"
+echo
+echo "Recorded hostile-eyes marker for HEAD in $MARKER"

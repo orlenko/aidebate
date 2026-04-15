@@ -27,6 +27,7 @@ class Adapter:
     submit_key: str
     submit_delay: float
     permission_prompts: list[PermissionPattern]
+    ready_patterns: list[re.Pattern]
     answer_instruction: str
     startup_keys: list[StartupKey]
 
@@ -44,6 +45,10 @@ class Adapter:
             permission_prompts=[
                 PermissionPattern(re.compile(p["match"]), p["respond"])
                 for p in data.get("permission_prompts", [])
+            ],
+            ready_patterns=[
+                re.compile(p)
+                for p in data.get("ready_patterns", [])
             ],
             answer_instruction=data["answer_instruction"],
             # Optional: keys to press automatically after the CLI launches.

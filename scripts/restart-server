@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+cd "$ROOT"
+
+HOST=${HOST:-127.0.0.1}
+PORT=${PORT:-8765}
+LOG=${LOG:-/tmp/aidebate-server.log}
+
+PIDS=$(lsof -tiTCP:"$PORT" -sTCP:LISTEN || true)
+if [[ -n "$PIDS" ]]; then
+  echo "Killing existing listener(s) on :$PORT: $PIDS"
+  kill $PIDS
+  sleep 1
+fi
+
+echo "Starting aidebate server on $HOST:$PORT"
+PYTHONPATH=src nohup ./.venv/bin/python -m aidebate.cli serve --host "$HOST" --port "$PORT" >"$LOG" 2>&1 &
+
+sleep 1
+NEW_PIDS=$(lsof -tiTCP:"$PORT" -sTCP:LISTEN || true)
+if [[ -z "$NEW_PIDS" ]]; then
+  echo "Server did not start. Check $LOG" >&2
+  exit 1
+fi
+
+echo "Server running on $HOST:$PORT (pid: $NEW_PIDS)"
+echo "Log: $LOG"

@@ -44,6 +44,23 @@ class AgentPane:
         out = self.pane.cmd("capture-pane", "-p", "-S", f"-{lines}").stdout
         return "\n".join(out)
 
+    def wait_until_ready(self, timeout: float = 10.0) -> bool:
+        """Wait until adapter-specific ready text appears in the pane.
+
+        Adapters without explicit ready patterns fall back to timed sleeps in
+        the caller and report ready immediately.
+        """
+        if not self.adapter.ready_patterns:
+            return True
+
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            text = self.capture(lines=120)
+            if any(p.search(text) for p in self.adapter.ready_patterns):
+                return True
+            time.sleep(0.25)
+        return False
+
     def handle_permission_prompts(self, duration: float = 2.0) -> None:
         """Scan the pane briefly and auto-respond to known prompts.
 
