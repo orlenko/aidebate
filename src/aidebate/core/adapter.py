@@ -1,4 +1,5 @@
 """Agent adapter config loader."""
+
 from __future__ import annotations
 
 import re
@@ -16,8 +17,8 @@ class PermissionPattern:
 
 @dataclass
 class StartupKey:
-    delay: float   # seconds after launch
-    key: str       # tmux key name ("Enter", "Space", ...)
+    delay: float  # seconds after launch
+    key: str  # tmux key name ("Enter", "Space", ...)
 
 
 @dataclass
@@ -46,10 +47,7 @@ class Adapter:
                 PermissionPattern(re.compile(p["match"]), p["respond"])
                 for p in data.get("permission_prompts", [])
             ],
-            ready_patterns=[
-                re.compile(p)
-                for p in data.get("ready_patterns", [])
-            ],
+            ready_patterns=[re.compile(p) for p in data.get("ready_patterns", [])],
             answer_instruction=data["answer_instruction"],
             # Optional: keys to press automatically after the CLI launches.
             # Useful for dismissing "trust this folder?" style dialogs whose
@@ -66,3 +64,21 @@ ADAPTERS_DIR = Path(__file__).resolve().parent.parent / "adapters"
 
 def load_adapter(name: str) -> Adapter:
     return Adapter.load(ADAPTERS_DIR / f"{name}.yaml")
+
+
+def validate_all_adapters() -> dict[str, Adapter | str]:
+    """Load every adapter YAML and return {name: Adapter_or_error_string}.
+
+    Used at startup so bad YAML surfaces before a debate is underway.
+    Individual failures don't abort — a broken adapter only matters if
+    someone actually tries to use it — but the caller can print warnings
+    and decide its own policy.
+    """
+    results: dict[str, Adapter | str] = {}
+    for path in sorted(ADAPTERS_DIR.glob("*.yaml")):
+        name = path.stem
+        try:
+            results[name] = Adapter.load(path)
+        except Exception as e:
+            results[name] = f"{type(e).__name__}: {e}"
+    return results

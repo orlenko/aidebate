@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 from aidebate import __version__
-from aidebate.core.adapter import load_adapter
+from aidebate.core.adapter import Adapter, load_adapter, validate_all_adapters
 from aidebate.core.debate import Side, run_debate
 from aidebate.core.session import (
     create_session,
@@ -35,8 +35,31 @@ def _apply_sessions_dir(args: argparse.Namespace) -> None:
         os.environ["AIDEBATE_HOME"] = str(Path(override).expanduser().resolve())
 
 
+def _warn_on_bad_adapters() -> None:
+    """Print a loud warning for any malformed adapter YAML, but don't abort.
+
+    A broken adapter only actually bites if someone tries to USE it, so
+    failing fast here would over-correct. Surfacing the error at startup
+    beats discovering it mid-debate after the CLIs have already spun up.
+    """
+    results = validate_all_adapters()
+    bad = {name: msg for name, msg in results.items() if not isinstance(msg, Adapter)}
+    if bad:
+        print(
+            f"[debate] WARNING: {len(bad)} adapter YAML file(s) failed to load:",
+            file=sys.stderr,
+        )
+        for name, msg in bad.items():
+            print(f"[debate]   {name}.yaml — {msg}", file=sys.stderr)
+        print(
+            "[debate] Debates using these adapters will fail. Fix the YAML or pick a different agent.",
+            file=sys.stderr,
+        )
+
+
 def cmd_smoke(args: argparse.Namespace) -> int:
     _apply_sessions_dir(args)
+    _warn_on_bad_adapters()
     adapter = load_adapter(args.agent)
     session = create_session()
     tmux_name = f"debate-{session.session_id}"
@@ -115,6 +138,7 @@ def parse_side(spec: str, default_agent: str = "claude") -> Side:
 
 def cmd_run(args: argparse.Namespace) -> int:
     _apply_sessions_dir(args)
+    _warn_on_bad_adapters()
     if len(args.side) < 2:
         print("[debate] need at least two --side entries", file=sys.stderr)
         return 2
@@ -181,6 +205,7 @@ def cmd_attach(args: argparse.Namespace) -> int:
 
 def cmd_serve(args: argparse.Namespace) -> int:
     _apply_sessions_dir(args)
+    _warn_on_bad_adapters()
     from aidebate.web.server import serve
 
     serve(host=args.host, port=args.port)

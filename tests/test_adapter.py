@@ -1,4 +1,5 @@
 """Adapter YAML loading + startup-key parsing."""
+
 from __future__ import annotations
 
 import textwrap
@@ -6,7 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from aidebate.core.adapter import ADAPTERS_DIR, Adapter, load_adapter
+from aidebate.core.adapter import (
+    ADAPTERS_DIR,
+    Adapter,
+    load_adapter,
+    validate_all_adapters,
+)
 
 
 def test_shipped_adapters_load():
@@ -82,6 +88,40 @@ def test_custom_adapter_round_trip(tmp_path: Path):
 def test_missing_adapter_raises():
     with pytest.raises(FileNotFoundError):
         load_adapter("nope-not-real")
+
+
+def test_validate_all_adapters_loads_shipped():
+    """validate_all_adapters should return real Adapter objects for every
+    shipped yaml — not error strings."""
+    results = validate_all_adapters()
+    assert set(results.keys()) == {p.stem for p in ADAPTERS_DIR.glob("*.yaml")}
+    for name, result in results.items():
+        assert isinstance(result, Adapter), f"{name} failed to validate: {result!r}"
+
+
+def test_validate_all_adapters_reports_bad_yaml(tmp_path: Path, monkeypatch):
+    """Bad YAML should come back as an error string, not raise."""
+    import aidebate.core.adapter as adapter_mod
+
+    # Build a fake adapters dir with one good and one broken YAML.
+    good = tmp_path / "good.yaml"
+    good.write_text(
+        textwrap.dedent(
+            """
+            name: good
+            cmd: "echo ok"
+            answer_instruction: "done"
+            """
+        ).strip()
+    )
+    bad = tmp_path / "bad.yaml"
+    bad.write_text("this: is: not: valid: yaml: [[")
+
+    monkeypatch.setattr(adapter_mod, "ADAPTERS_DIR", tmp_path)
+    results = validate_all_adapters()
+    assert isinstance(results["good"], Adapter)
+    assert isinstance(results["bad"], str)
+    assert "Error" in results["bad"] or "error" in results["bad"].lower()
 
 
 def test_gemini_cmd_quotes_session_root():

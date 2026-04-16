@@ -37,7 +37,11 @@ def sessions_root() -> Path:
 
 
 def new_session_id() -> str:
-    return datetime.now().strftime("%Y-%m-%d-%H%M%S")
+    """Per-debate identifier. Millisecond precision so two debates kicked
+    off in the same second don't collide — tmux session names and on-disk
+    session dirs both key off this value."""
+    now = datetime.now()
+    return now.strftime("%Y-%m-%d-%H%M%S") + f"-{now.microsecond // 1000:03d}"
 
 
 @dataclass
