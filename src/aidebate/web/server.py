@@ -174,6 +174,7 @@ def _poll_session(state: SessionState) -> None:
     """Poll tmux panes, answer files, and events.jsonl; emit change events."""
     last_pane_text: dict[str, str] = {}
     last_answers: dict[str, str] = {}
+    last_final: dict[str, str] = {}  # verdict.md / roast.md content last seen
     events_pos = 0  # byte offset into events.jsonl already forwarded
     # Wait for run_debate to spawn panes.
     waits = 0
@@ -243,6 +244,25 @@ def _poll_session(state: SessionState) -> None:
                             "content": content,
                         }
                     )
+        # Verdict + roast — emit as soon as the file appears on disk so the
+        # live UI doesn't have to wait for the WHOLE debate (including roast)
+        # to finish before showing the verdict tab. Without this, the
+        # `verdict` / `roast` events were only emitted from _run_debate_thread
+        # after run_debate returned, which is after phase 5, not phase 4.
+        for name in ("verdict", "roast"):
+            f = session.root / f"{name}.md"
+            if not f.exists():
+                continue
+            try:
+                content = f.read_text()
+            except OSError:
+                continue
+            if content != last_final.get(name):
+                last_final[name] = content
+                # Keep state in sync so page-load REST endpoints return the
+                # same content the live subscribers already received.
+                setattr(state, name, content)
+                state.emit({"type": name, "content": content})
         time.sleep(1.0)
 
     # Final drain so the last few narrative events (verdict_ready,
