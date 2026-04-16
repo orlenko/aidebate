@@ -1,4 +1,5 @@
 """End-to-end debate runner: opening -> cross-exam -> rebuttal -> verdict -> roast."""
+
 from __future__ import annotations
 
 import json
@@ -8,6 +9,7 @@ from pathlib import Path
 
 from .adapter import load_adapter
 from .crossexam import install_chat_helper, run_crossexam
+from .events import EventLog
 from .pane import AgentPane
 from .phases import Task, run_parallel
 from .session import (
@@ -18,7 +20,6 @@ from .session import (
     spawn_agent_pane,
 )
 from .turn import canary_handshake, run_turn
-
 
 ROASTMASTER_ROLE = "roastmaster"
 ROASTMASTER_AGENT = "claude"
@@ -80,9 +81,9 @@ def _chat_blurb(chat_path: Path, role: str) -> str:
         f"  {chat_path}\n\n"
         "To post a message, use the `chat-say` helper in your working "
         "directory — it handles timestamps and JSON formatting for you:\n"
-        "  `./chat-say \"Your message here\"`                     (broadcast)\n"
-        "  `./chat-say --to <role> \"Directed message\"`           (targeted)\n"
-        "  `./chat-say --to <roleA>,<roleB> \"For two roles\"`     (multi)\n\n"
+        '  `./chat-say "Your message here"`                     (broadcast)\n'
+        '  `./chat-say --to <role> "Directed message"`           (targeted)\n'
+        '  `./chat-say --to <roleA>,<roleB> "For two roles"`     (multi)\n\n'
         f"Your role is: {role}. Read the chat tail (e.g. "
         f"`tail -n 40 {chat_path}`) before finalizing your answer, and "
         "address anything aimed at you. Keep chat messages short (≤2 "
@@ -106,7 +107,7 @@ def _format_chat_transcript(chat_path: Path, limit: int | None = None) -> str:
         except Exception:
             continue
         to = ",".join(m.get("to") or []) or "*"
-        lines.append(f"[{m.get('ts','?')}] {m.get('from','?')} -> {to}: {m.get('text','')}")
+        lines.append(f"[{m.get('ts', '?')}] {m.get('from', '?')} -> {to}: {m.get('text', '')}")
     return "\n".join(lines) if lines else "(no chat)"
 
 
@@ -117,9 +118,7 @@ def _opening_prompt(topic: str, side: Side, chat_path: Path, all_roles: list[str
         f"## Topic\n{topic}\n\n"
         f"## Your role: {side.role}\n"
         f"## Your stance\n{side.stance}\n\n"
-        f"## Other debaters\n"
-        + "\n".join(f"- {r}" for r in others)
-        + "\n\n## Your task\n"
+        f"## Other debaters\n" + "\n".join(f"- {r}" for r in others) + "\n\n## Your task\n"
         "Write a concise (~250 word) opening statement defending your stance. "
         "Give your thesis, your 3–5 strongest arguments with concrete evidence, "
         "and briefly acknowledge the strongest objection you expect.\n\n"
@@ -180,7 +179,7 @@ def _verdict_prompt(
     dropout_note = ""
     if dropouts:
         lines = [
-            f"- `{d['role']}` ({d.get('agent','?')}) — dropped during {d['phase']}: {d['error']}"
+            f"- `{d['role']}` ({d.get('agent', '?')}) — dropped during {d['phase']}: {d['error']}"
             for d in dropouts
         ]
         dropout_note = (
@@ -208,7 +207,7 @@ def _verdict_prompt(
         "3. **Open questions** — 2–3 questions this debate did not resolve "
         "that a decision-maker would still need to answer.\n\n"
         "Be concrete and willing to pick a winner. Avoid mushy "
-        "\"both sides have merit\" conclusions unless the debate genuinely "
+        '"both sides have merit" conclusions unless the debate genuinely '
         "produced a tie."
     )
 
@@ -223,25 +222,23 @@ def _roast_prompt(
     moderator_agent: str,
     dropouts: list[dict] | None = None,
 ) -> str:
-    participants = "\n".join(
-        f"- `{s.role}` ({s.agent}) — stance: {s.stance}" for s in sides
-    )
+    participants = "\n".join(f"- `{s.role}` ({s.agent}) — stance: {s.stance}" for s in sides)
     participants += f"\n- `moderator` ({moderator_agent})"
-    opening_blocks = "\n\n".join(
-        f"### `{r}` opening\n\n{t}" for r, t in openings.items()
-    ) or "(none delivered)"
-    rebuttal_blocks = "\n\n".join(
-        f"### `{r}` rebuttal\n\n{t}" for r, t in rebuttals.items()
-    ) or "(none delivered)"
+    opening_blocks = (
+        "\n\n".join(f"### `{r}` opening\n\n{t}" for r, t in openings.items()) or "(none delivered)"
+    )
+    rebuttal_blocks = (
+        "\n\n".join(f"### `{r}` rebuttal\n\n{t}" for r, t in rebuttals.items())
+        or "(none delivered)"
+    )
     dropout_note = ""
     if dropouts:
         lines = [
-            f"- `{d['role']}` ({d.get('agent','?')}) — dropped during {d['phase']}: {d['error']}"
+            f"- `{d['role']}` ({d.get('agent', '?')}) — dropped during {d['phase']}: {d['error']}"
             for d in dropouts
         ]
         dropout_note = (
-            "\n\n## Participants who dropped out (fair game to roast for it)\n"
-            + "\n".join(lines)
+            "\n\n## Participants who dropped out (fair game to roast for it)\n" + "\n".join(lines)
         )
     return (
         "# Post-debate roast\n\n"
@@ -254,9 +251,7 @@ def _roast_prompt(
         + rebuttal_blocks
         + "\n\n## Cross-examination transcript\n\n"
         f"```\n{chat_transcript}\n```\n\n"
-        "## Moderator's verdict\n\n"
-        + verdict_text
-        + "\n\n## Your task\n"
+        "## Moderator's verdict\n\n" + verdict_text + "\n\n## Your task\n"
         "Follow the tone and structure rules in your CLAUDE.md exactly. "
         "One `## <role> (<agent>)` section per participant (including "
         "`moderator`), then a short bonus paragraph for the whole cast. "
@@ -286,9 +281,7 @@ def run_debate(
         "session_id": session.session_id,
         "topic": topic,
         "moderator_agent": moderator_agent,
-        "sides": [
-            {"role": s.role, "agent": s.agent, "stance": s.stance} for s in sides
-        ],
+        "sides": [{"role": s.role, "agent": s.agent, "stance": s.stance} for s in sides],
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "status": "running",
         "verdict_path": None,
@@ -298,10 +291,17 @@ def run_debate(
     manifest["dropouts"] = []  # list[{role, agent, phase, error}]
     manifest_path.write_text(json.dumps(manifest, indent=2))
 
+    events = EventLog(session.root / "events.jsonl")
+    events.emit(
+        "debate_started",
+        topic=topic,
+        moderator_agent=moderator_agent,
+        sides=[{"role": s.role, "agent": s.agent, "stance": s.stance} for s in sides],
+        roast_enabled=bool(roast),
+    )
+
     def _record_dropout(role: str, phase: str, err: Exception, agent: str | None = None) -> None:
-        agent_name = agent or next(
-            (s.agent for s in sides if s.role == role), "?"
-        )
+        agent_name = agent or next((s.agent for s in sides if s.role == role), "?")
         entry = {
             "role": role,
             "agent": agent_name,
@@ -311,6 +311,7 @@ def run_debate(
         }
         manifest["dropouts"].append(entry)
         manifest_path.write_text(json.dumps(manifest, indent=2))
+        events.emit("dropout", role=role, agent=agent_name, phase=phase, error=str(err))
         print(f"[debate] DROPOUT: {role}@{agent_name} failed during {phase}: {err}")
 
     # Spawn moderator first so it becomes the main (leftmost) pane; then
@@ -330,9 +331,7 @@ def run_debate(
         roast_cwd = session.root / "agents" / ROASTMASTER_ROLE
         roast_cwd.mkdir(parents=True, exist_ok=True)
         (roast_cwd / "CLAUDE.md").write_text(ROASTMASTER_CLAUDE_MD)
-        roastmaster = spawn_agent_pane(
-            session, ROASTMASTER_ROLE, load_adapter(ROASTMASTER_AGENT)
-        )
+        roastmaster = spawn_agent_pane(session, ROASTMASTER_ROLE, load_adapter(ROASTMASTER_AGENT))
     apply_moderator_layout(session, moderator_width_pct=33)
 
     if on_session_ready is not None:
@@ -344,7 +343,9 @@ def run_debate(
     # on with whoever survived, as long as at least one debater did.
     # -----------------------------------------------------------------
     print(f"[debate] canary handshakes (timeout {canary_timeout}s)...")
+    events.emit("canary_started")
     import threading
+
     canary_errors: dict[str, Exception] = {}
 
     def _canary(role: str, ap: AgentPane) -> None:
@@ -369,12 +370,12 @@ def run_debate(
         print(f"[debate] MODERATOR CANARY FAILED: {err}")
         raise RuntimeError(f"moderator canary handshake failed: {err}")
 
-    roastmaster_alive = (
-        roastmaster is not None and ROASTMASTER_ROLE not in canary_errors
-    )
+    roastmaster_alive = roastmaster is not None and ROASTMASTER_ROLE not in canary_errors
     if roastmaster is not None and not roastmaster_alive:
         _record_dropout(
-            ROASTMASTER_ROLE, "canary", canary_errors[ROASTMASTER_ROLE],
+            ROASTMASTER_ROLE,
+            "canary",
+            canary_errors[ROASTMASTER_ROLE],
             agent=ROASTMASTER_AGENT,
         )
 
@@ -385,14 +386,18 @@ def run_debate(
         panes.pop(role, None)
     active_sides = [s for s in sides if s.role in panes]
     if not active_sides:
-        raise RuntimeError(
-            "no debaters survived the canary handshake — cannot proceed"
-        )
+        raise RuntimeError("no debaters survived the canary handshake — cannot proceed")
     if canary_errors:
         survivors = ", ".join(s.role for s in active_sides)
         print(f"[debate] carrying on with {len(active_sides)} debater(s): {survivors}")
     else:
         print("[debate] all canaries OK")
+
+    # Emit participant_ready for everyone who survived.
+    for role, ap in canary_targets.items():
+        if role in canary_errors:
+            continue
+        events.emit("participant_ready", role=role, agent=ap.adapter.name)
 
     chat_path = session.chat_path
 
@@ -405,6 +410,7 @@ def run_debate(
         phase_dir: Path,
         build_prompt,  # (Side) -> str
     ) -> dict[str, str]:
+        events.emit("phase_started", phase=phase_name)
         tasks = [Task(panes[s.role], build_prompt(s)) for s in active_sides]
         results = run_parallel(tasks, phase_dir, timeout=turn_timeout)
         answers: dict[str, str] = {}
@@ -414,12 +420,12 @@ def run_debate(
                 panes.pop(r, None)
             elif res.answer is not None:
                 answers[r] = res.answer
+                events.emit("participant_completed_phase", role=r, phase=phase_name)
         # Update active_sides in place.
         active_sides[:] = [s for s in active_sides if s.role in panes]
         if not active_sides:
-            raise RuntimeError(
-                f"no debaters survived phase '{phase_name}' — cannot proceed"
-            )
+            raise RuntimeError(f"no debaters survived phase '{phase_name}' — cannot proceed")
+        events.emit("phase_completed", phase=phase_name)
         return answers
 
     # Install the `chat-say` helper in every surviving pane's cwd so agents
@@ -433,9 +439,7 @@ def run_debate(
     openings = _run_phase(
         "opening",
         session.root / "phase-1-opening",
-        lambda s: _opening_prompt(
-            topic, s, chat_path, [x.role for x in active_sides]
-        ),
+        lambda s: _opening_prompt(topic, s, chat_path, [x.role for x in active_sides]),
     )
 
     # Phase 2 — Cross-examination (event-driven group chat)
@@ -447,6 +451,7 @@ def run_debate(
             f"(wallclock {crossexam_wallclock:.0f}s, silence {crossexam_silence:.0f}s, "
             f"{len(active_sides)} debater(s))"
         )
+        events.emit("phase_started", phase="crossexam")
         run_crossexam(
             session_root=session.root,
             chat_path=chat_path,
@@ -458,9 +463,12 @@ def run_debate(
             wallclock=crossexam_wallclock,
             silence_timeout=crossexam_silence,
             turn_timeout=min(turn_timeout, 300.0),
+            event_log=events,
         )
+        events.emit("phase_completed", phase="crossexam")
     else:
         print("[debate] phase 2: skipped (only one debater left — nothing to cross-examine)")
+        events.emit("phase_skipped", phase="crossexam", reason="fewer than two debaters left")
     chat_transcript = _format_chat_transcript(chat_path)
 
     # Phase 3 — Rebuttal (parallel)
@@ -475,10 +483,12 @@ def run_debate(
         )
     else:
         print("[debate] phase 3: skipped (only one debater left — nothing to rebut)")
+        events.emit("phase_skipped", phase="rebuttal", reason="fewer than two debaters left")
         rebuttals = {}
 
     # Phase 4 — Verdict (moderator)
     print("[debate] phase 4: verdict (moderator)")
+    events.emit("phase_started", phase="verdict")
     phase4_dir = session.root / "phase-4-verdict"
     # Re-read transcript in case new chat arrived during rebuttal.
     chat_transcript = _format_chat_transcript(chat_path)
@@ -486,13 +496,20 @@ def run_debate(
         moderator,
         phase4_dir,
         _verdict_prompt(
-            topic, active_sides, openings, rebuttals, chat_path, chat_transcript,
+            topic,
+            active_sides,
+            openings,
+            rebuttals,
+            chat_path,
+            chat_transcript,
             dropouts=manifest["dropouts"],
         ),
         timeout=turn_timeout,
     )
     verdict_path = session.root / "verdict.md"
     verdict_path.write_text(verdict_text)
+    events.emit("verdict_ready")
+    events.emit("phase_completed", phase="verdict")
     print(f"[debate] verdict written to {verdict_path}")
 
     # Phase 5 — Roast (roastmaster). Bundled in unless caller opted out;
@@ -501,8 +518,10 @@ def run_debate(
     manifest["roast_enabled"] = bool(roast)
     if not roast:
         print("[debate] phase 5: skipped (roast disabled by caller)")
+        events.emit("phase_skipped", phase="roast", reason="disabled by caller")
     elif roastmaster_alive and roastmaster is not None:
         print("[debate] phase 5: roast (roastmaster)")
+        events.emit("phase_started", phase="roast")
         phase5_dir = session.root / "phase-5-roast"
         chat_transcript = _format_chat_transcript(chat_path)
         try:
@@ -510,8 +529,13 @@ def run_debate(
                 roastmaster,
                 phase5_dir,
                 _roast_prompt(
-                    topic, active_sides, openings, rebuttals,
-                    verdict_text, chat_transcript, moderator_agent,
+                    topic,
+                    active_sides,
+                    openings,
+                    rebuttals,
+                    verdict_text,
+                    chat_transcript,
+                    moderator_agent,
                     dropouts=manifest["dropouts"],
                 ),
                 timeout=turn_timeout,
@@ -519,17 +543,25 @@ def run_debate(
             roast_path = session.root / "roast.md"
             roast_path.write_text(roast_text)
             manifest["roast_path"] = str(roast_path.relative_to(session.root))
+            events.emit("roast_ready")
+            events.emit("phase_completed", phase="roast")
             print(f"[debate] roast written to {roast_path}")
         except Exception as e:
             _record_dropout(ROASTMASTER_ROLE, "roast", e, agent=ROASTMASTER_AGENT)
             print(f"[debate] roast skipped: {e}")
     else:
         print("[debate] phase 5: skipped (roastmaster did not survive canary)")
+        events.emit(
+            "phase_skipped",
+            phase="roast",
+            reason="roastmaster did not survive canary",
+        )
 
     # Finalize manifest.
     manifest["status"] = "done"
     manifest["verdict_path"] = str(verdict_path.relative_to(session.root))
     manifest["completed_at"] = datetime.now().isoformat(timespec="seconds")
     manifest_path.write_text(json.dumps(manifest, indent=2))
+    events.emit("debate_completed", status="done")
 
     return session

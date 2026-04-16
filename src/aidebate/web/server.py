@@ -8,6 +8,7 @@ One-process app:
   - A single HTML page (`static/index.html`) renders the form and the
     live view.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -25,6 +26,7 @@ from fastapi.staticfiles import StaticFiles
 from aidebate import __version__
 from aidebate.core.adapter import ADAPTERS_DIR
 from aidebate.core.debate import Side, run_debate
+from aidebate.core.events import EventLog, read_events
 from aidebate.core.session import DebateSession, sessions_root
 
 HERE = Path(__file__).resolve().parent
@@ -51,18 +53,26 @@ class SessionState:
     verdict: str | None = None
     roast: str | None = None
     events: list[dict] = field(default_factory=list)
+    # Narrative events (play-by-play) kept in a separate, untrimmed buffer
+    # so reconnecting clients always get the full story even on long
+    # debates where pane captures have pushed other events out of `events`.
+    # Narrative events are low-volume (expected <100 per debate), so no
+    # trim is needed.
+    narrative_events: list[dict] = field(default_factory=list)
     subscribers: list[queue.Queue] = field(default_factory=list)
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     # Cap the in-memory event buffer so long-running servers don't
     # accumulate unbounded pane captures. New subscribers still get a
-    # backlog, just a trimmed one.
+    # backlog, just a trimmed one. Does not apply to `narrative_events`.
     EVENT_BUFFER_MAX: int = 500
 
     def emit(self, event: dict) -> None:
         event = {"id": len(self.events), **event, "ts": time.time()}
         with self._lock:
             self.events.append(event)
+            if event.get("type") == "narrative":
+                self.narrative_events.append(event)
             if len(self.events) > self.EVENT_BUFFER_MAX:
                 # Drop the oldest chunk in one shot to keep the common
                 # path O(1) amortized.
@@ -72,7 +82,21 @@ class SessionState:
             try:
                 q.put_nowait(event)
             except queue.Full:
-                pass
+                # Queue full: drop the oldest item to make room. Pane
+                # captures dominate the queue as a constant stream of
+                # terminal snapshots, so the oldest item is almost always
+                # a stale pane event we can safely lose. What we MUST NOT
+                # lose is late-debate terminal events (verdict, roast,
+                # status=done) — dropping those silently was a real bug
+                # that left the UI stuck.
+                try:
+                    q.get_nowait()
+                except queue.Empty:
+                    pass
+                try:
+                    q.put_nowait(event)
+                except queue.Full:
+                    pass
 
 
 SESSIONS: dict[str, SessionState] = {}
@@ -93,9 +117,10 @@ def _capture_pane(pane) -> str:
 
 
 def _poll_session(state: SessionState) -> None:
-    """Poll tmux panes and answer files; emit events on change."""
+    """Poll tmux panes, answer files, and events.jsonl; emit change events."""
     last_pane_text: dict[str, str] = {}
     last_answers: dict[str, str] = {}
+    events_pos = 0  # byte offset into events.jsonl already forwarded
     # Wait for run_debate to spawn panes.
     waits = 0
     while state.debate_session is None and waits < 60:
@@ -105,9 +130,40 @@ def _poll_session(state: SessionState) -> None:
         return
 
     session = state.debate_session
-    state.emit({"type": "session_ready", "session_id": session.session_id, "tmux": f"debate-{session.session_id}"})
+    state.emit(
+        {
+            "type": "session_ready",
+            "session_id": session.session_id,
+            "tmux": f"debate-{session.session_id}",
+        }
+    )
+
+    events_path = session.root / "events.jsonl"
+
+    def _drain_events() -> int:
+        nonlocal events_pos
+        if not events_path.exists():
+            return events_pos
+        try:
+            with events_path.open("r") as f:
+                f.seek(events_pos)
+                chunk = f.read()
+                events_pos = f.tell()
+        except OSError:
+            return events_pos
+        for line in chunk.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                ev = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            state.emit({"type": "narrative", "event": ev})
+        return events_pos
 
     while state.status in ("starting", "running"):
+        _drain_events()
         # Pane captures.
         for role, ap in list(session.panes.items()):
             text = _capture_pane(ap.pane)
@@ -125,13 +181,19 @@ def _poll_session(state: SessionState) -> None:
                 key = f"{phase_dir.name}:{role}"
                 if content != last_answers.get(key):
                     last_answers[key] = content
-                    state.emit({
-                        "type": "answer",
-                        "role": role,
-                        "phase": phase_dir.name,
-                        "content": content,
-                    })
+                    state.emit(
+                        {
+                            "type": "answer",
+                            "role": role,
+                            "phase": phase_dir.name,
+                            "content": content,
+                        }
+                    )
         time.sleep(1.0)
+
+    # Final drain so the last few narrative events (verdict_ready,
+    # roast_ready, debate_completed) always make it to live subscribers.
+    _drain_events()
 
     # Final pass to capture anything written between the last poll and the end.
     if session is not None:
@@ -148,10 +210,7 @@ def _poll_session(state: SessionState) -> None:
 
 def _run_debate_thread(state: SessionState) -> None:
     try:
-        sides = [
-            Side(role=s["role"], stance=s["stance"], agent=s["agent"])
-            for s in state.sides
-        ]
+        sides = [Side(role=s["role"], stance=s["stance"], agent=s["agent"]) for s in state.sides]
 
         def _on_ready(session: DebateSession) -> None:
             state.debate_session = session
@@ -180,8 +239,26 @@ def _run_debate_thread(state: SessionState) -> None:
     except Exception as e:
         state.status = "error"
         state.error = str(e)
+        # Append a debate_completed event so the archive view renders the
+        # failure in the play-by-play just like a successful finish.
+        if state.debate_session is not None:
+            try:
+                EventLog(state.debate_session.root / "events.jsonl").emit(
+                    "debate_completed", status="error", error=str(e)
+                )
+            except OSError as log_err:
+                # Don't let logging errors mask the real failure; note it.
+                print(f"[server] failed to record debate_completed event: {log_err}")
         state.emit({"type": "error", "message": str(e)})
         state.emit({"type": "status", "status": "error"})
+    finally:
+        # Tear down the tmux session so panes + their child agent processes
+        # don't leak. Wait briefly for the poller to finish its final drain
+        # + pane captures first, so those race-free against a live tmux.
+        if state.poller is not None and state.poller.is_alive():
+            state.poller.join(timeout=5.0)
+        if state.debate_session is not None:
+            state.debate_session.kill()
 
 
 # ---------------------------------------------------------------------------
@@ -212,10 +289,7 @@ def list_sessions() -> list[dict]:
     # restarted mid-run) gets downgraded to "stale" so the UI doesn't
     # pretend the debate is still live.
     with SESSIONS_LOCK:
-        live_ids = {
-            sid for sid, st in SESSIONS.items()
-            if st.status in ("starting", "running")
-        }
+        live_ids = {sid for sid, st in SESSIONS.items() if st.status in ("starting", "running")}
     out: list[dict] = []
     for d in sorted(sessions_root().iterdir(), reverse=True):
         if not d.is_dir():
@@ -225,15 +299,17 @@ def list_sessions() -> list[dict]:
         if mf.exists():
             try:
                 data = json.loads(mf.read_text())
-                entry.update({
-                    "topic": data.get("topic"),
-                    "status": data.get("status"),
-                    "moderator_agent": data.get("moderator_agent"),
-                    "sides": data.get("sides"),
-                    "created_at": data.get("created_at"),
-                    "completed_at": data.get("completed_at"),
-                    "has_verdict": bool(data.get("verdict_path")),
-                })
+                entry.update(
+                    {
+                        "topic": data.get("topic"),
+                        "status": data.get("status"),
+                        "moderator_agent": data.get("moderator_agent"),
+                        "sides": data.get("sides"),
+                        "created_at": data.get("created_at"),
+                        "completed_at": data.get("completed_at"),
+                        "has_verdict": bool(data.get("verdict_path")),
+                    }
+                )
                 if data.get("status") == "running" and d.name not in live_ids:
                     entry["status"] = "stale"
             except Exception:
@@ -268,6 +344,7 @@ def show_session(sid: str) -> dict:
             ]
         except Exception:
             result["chat"] = []
+    result["events"] = read_events(d / "events.jsonl")
     phases: dict[str, dict[str, str]] = {}
     for phase_dir in sorted(d.glob("phase-*")):
         phase_entries: dict[str, str] = {}
@@ -328,6 +405,7 @@ def create_debate(payload: dict) -> dict:
     # Allocate session id up front (same format as the orchestrator) so the
     # caller can use it immediately for the SSE stream.
     from aidebate.core.session import new_session_id
+
     session_id = new_session_id()
     try:
         crossexam_wallclock = float(payload.get("crossexam_wallclock", 300.0))
@@ -380,16 +458,20 @@ def get_debate(sid: str) -> JSONResponse:
     state = SESSIONS.get(sid)
     if state is None:
         raise HTTPException(404, "no such debate")
-    return JSONResponse({
-        "session_id": state.debate_session.session_id if state.debate_session else state.session_id,
-        "topic": state.topic,
-        "sides": state.sides,
-        "moderator": state.moderator_agent,
-        "status": state.status,
-        "error": state.error,
-        "verdict": state.verdict,
-        "event_count": len(state.events),
-    })
+    return JSONResponse(
+        {
+            "session_id": state.debate_session.session_id
+            if state.debate_session
+            else state.session_id,
+            "topic": state.topic,
+            "sides": state.sides,
+            "moderator": state.moderator_agent,
+            "status": state.status,
+            "error": state.error,
+            "verdict": state.verdict,
+            "event_count": len(state.events),
+        }
+    )
 
 
 @app.post("/api/debates/{sid}/panes/{role}/keys")
@@ -430,21 +512,28 @@ async def stream_events(sid: str) -> StreamingResponse:
         raise HTTPException(404, "no such debate")
 
     q: queue.Queue = queue.Queue(maxsize=1024)
-    # Replay existing events, then live-follow.
+    # Snapshot both buffers and register the subscriber atomically, so
+    # events emitted concurrently by the poller either land entirely in
+    # our snapshot (if before the lock) or entirely in our queue (if
+    # after the lock added us) — never both, never neither.
     with state._lock:
-        backlog = list(state.events)
+        narrative_backlog = list(state.narrative_events)
+        other_backlog = [ev for ev in state.events if ev.get("type") != "narrative"]
         state.subscribers.append(q)
 
     async def gen():
         try:
-            # Backlog first.
-            for ev in backlog:
+            # Replay the full narrative first so reconnecting clients always
+            # see the complete play-by-play, even on long-running debates
+            # where pane events have pushed other events out of the
+            # trimmed in-memory buffer.
+            for ev in narrative_backlog:
+                yield f"data: {json.dumps(ev)}\n\n"
+            for ev in other_backlog:
                 yield f"data: {json.dumps(ev)}\n\n"
             while True:
                 try:
-                    ev = await asyncio.get_event_loop().run_in_executor(
-                        None, q.get, True, 15.0
-                    )
+                    ev = await asyncio.get_event_loop().run_in_executor(None, q.get, True, 15.0)
                 except queue.Empty:
                     # SSE keep-alive comment.
                     yield ": keepalive\n\n"
@@ -463,6 +552,7 @@ async def stream_events(sid: str) -> StreamingResponse:
 
 def serve(host: str = "127.0.0.1", port: int = 8765) -> None:
     import uvicorn
+
     uvicorn.run(app, host=host, port=port, log_level="info")
 
 

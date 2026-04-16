@@ -9,6 +9,9 @@ let currentEventSource = null;
 let CURRENT_SID = null;
 let CURRENT_PAYLOAD = null;  // last-submitted payload, used for "Clone"
 
+// Play-by-play scroll-lock state for the live view.
+let playLogAutoScroll = true;
+
 const STORAGE_KEY = "aidebate:last-form";
 
 // ---------------------------------------------------------------------------
@@ -93,6 +96,172 @@ function renderDebateInfo(payload) {
 }
 
 // ---------------------------------------------------------------------------
+// Play-by-play renderer — turns a `narrative` event into a log line.
+// ---------------------------------------------------------------------------
+
+const PHASE_LABELS = {
+  opening: "Phase 1 — Opening statements",
+  crossexam: "Phase 2 — Cross-examination",
+  rebuttal: "Phase 3 — Rebuttals",
+  verdict: "Phase 4 — Verdict",
+  roast: "Phase 5 — Roast",
+};
+
+function fmtEventTime(isoTs) {
+  if (!isoTs) return "";
+  try {
+    const d = new Date(isoTs);
+    if (isNaN(d.getTime())) return isoTs;
+    return d.toLocaleTimeString([], { hour12: false });
+  } catch { return isoTs; }
+}
+
+// Given a narrative event, return { icon, bodyHtml, cls } or null to skip.
+function formatNarrative(ev) {
+  const roleTag = (r) => `<span class="role" style="color:${colorForRole(r)}">${escapeHtml(r)}</span>`;
+  switch (ev.type) {
+    case "debate_started": {
+      const sides = (ev.sides || []).map(s => `${roleTag(s.role)} (${escapeHtml(s.agent)})`).join(", ");
+      return {
+        icon: "🏁",
+        cls: "ev-phase",
+        bodyHtml: `Debate started — topic: <em>${escapeHtml(ev.topic || "")}</em>. Moderator: <code>${escapeHtml(ev.moderator_agent || "?")}</code>. Debaters: ${sides || "(none)"}.`,
+      };
+    }
+    case "canary_started":
+      return { icon: "🛎️", bodyHtml: `Canary handshake…` };
+    case "participant_ready":
+      return {
+        icon: "✓",
+        bodyHtml: `${roleTag(ev.role)} <span class="muted">(${escapeHtml(ev.agent || "?")})</span> ready`,
+      };
+    case "dropout":
+      return {
+        icon: "⚠",
+        cls: "ev-dropout",
+        bodyHtml: `${roleTag(ev.role)} dropped during <strong>${escapeHtml(ev.phase || "?")}</strong>: <span class="muted">${escapeHtml(ev.error || "")}</span>`,
+      };
+    case "phase_started":
+      return {
+        icon: "▶",
+        cls: "ev-phase",
+        bodyHtml: PHASE_LABELS[ev.phase] || `Phase: ${escapeHtml(ev.phase || "?")}`,
+      };
+    case "phase_completed":
+      return {
+        icon: "✓",
+        bodyHtml: `<span class="muted">${escapeHtml(PHASE_LABELS[ev.phase] || ev.phase || "phase")} complete</span>`,
+      };
+    case "phase_skipped":
+      return {
+        icon: "↷",
+        bodyHtml: `<span class="muted">${escapeHtml(PHASE_LABELS[ev.phase] || ev.phase || "phase")} skipped — ${escapeHtml(ev.reason || "")}</span>`,
+      };
+    case "participant_completed_phase":
+      return {
+        icon: "✓",
+        bodyHtml: `${roleTag(ev.role)} finished ${escapeHtml(ev.phase || "")}`,
+      };
+    case "chat_message": {
+      const to = Array.isArray(ev.to) ? ev.to.join(", ") : (ev.to || "*");
+      return {
+        icon: "💬",
+        bodyHtml: `${roleTag(ev.from || "?")} → ${escapeHtml(to || "*")}: <span class="chat-text">${escapeHtml(ev.text || "")}</span>`,
+      };
+    }
+    case "verdict_ready":
+      return { icon: "⚖", bodyHtml: `Verdict ready.` };
+    case "roast_ready":
+      return { icon: "🔥", bodyHtml: `Roast ready.` };
+    case "debate_completed":
+      if (ev.status === "error") {
+        return {
+          icon: "✖",
+          cls: "ev-dropout",
+          bodyHtml: `Debate ended with error: <span class="muted">${escapeHtml(ev.error || "")}</span>`,
+        };
+      }
+      return { icon: "🏆", cls: "ev-done", bodyHtml: `Debate complete.` };
+    default:
+      return null;
+  }
+}
+
+function appendNarrativeToLog(logEl, ev) {
+  const formatted = formatNarrative(ev);
+  if (!formatted) return;
+  const li = document.createElement("li");
+  if (formatted.cls) li.className = formatted.cls;
+  li.innerHTML = `
+    <span class="ev-ts">${escapeHtml(fmtEventTime(ev.ts))}</span>
+    <span class="ev-icon">${formatted.icon || ""}</span>
+    <span class="ev-body">${formatted.bodyHtml}</span>`;
+  // Drop the "waiting" placeholder the first time we append.
+  const placeholder = $(".ev-empty", logEl);
+  if (placeholder) placeholder.remove();
+  logEl.appendChild(li);
+}
+
+function setupPlayLogScrollLock() {
+  const log = el("play-log");
+  const btn = el("jump-live");
+  if (!log || !btn) return;
+  playLogAutoScroll = true;
+  btn.hidden = true;
+  log.onscroll = () => {
+    // "at bottom" with a 40px slack for sub-pixel rounding.
+    const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+    if (atBottom) {
+      playLogAutoScroll = true;
+      btn.hidden = true;
+    } else {
+      playLogAutoScroll = false;
+      btn.hidden = false;
+    }
+  };
+  btn.onclick = () => {
+    playLogAutoScroll = true;
+    btn.hidden = true;
+    log.scrollTop = log.scrollHeight;
+  };
+}
+
+function maybeAutoScroll() {
+  if (!playLogAutoScroll) return;
+  const log = el("play-log");
+  if (log) log.scrollTop = log.scrollHeight;
+}
+
+// ---------------------------------------------------------------------------
+// Tabs
+// ---------------------------------------------------------------------------
+
+function bindTabs(tabsRoot, panelPrefix, dataAttr = "data-tab") {
+  const buttons = $$(`.tab[${dataAttr}]`, tabsRoot);
+  buttons.forEach(btn => {
+    btn.addEventListener("click", () => {
+      const tab = btn.getAttribute(dataAttr);
+      buttons.forEach(b => {
+        const active = b === btn;
+        b.classList.toggle("active", active);
+        b.setAttribute("aria-selected", active ? "true" : "false");
+      });
+      // Panels are siblings after the tab bar.
+      const panels = tabsRoot.parentElement.querySelectorAll(".tab-panel");
+      panels.forEach(p => {
+        p.classList.toggle("active", p.id === `${panelPrefix}${tab}`);
+      });
+      if (tab === "play") maybeAutoScroll();
+    });
+  });
+}
+
+function activateTab(tabsRoot, tabName, dataAttr = "data-tab") {
+  const btn = $(`.tab[${dataAttr}="${tabName}"]`, tabsRoot);
+  if (btn) btn.click();
+}
+
+// ---------------------------------------------------------------------------
 // Form persistence
 // ---------------------------------------------------------------------------
 
@@ -112,12 +281,9 @@ function loadSavedForm() {
   } catch (e) { return null; }
 }
 
-// Fill the setup form from a payload-shaped object.
-// Also used by the "Clone" buttons in live/archive views.
 function fillFormFrom(payload) {
   $("textarea[name=topic]").value = payload.topic || "";
   el("moderator").value = payload.moderator || payload.moderator_agent || "claude";
-  // `roast` defaults to true; only a literal `false` ticks the opt-out.
   el("no-roast").checked = payload.roast === false;
   el("sides").innerHTML = "";
   for (const s of payload.sides || []) addSide(s);
@@ -138,9 +304,7 @@ function showSetup() {
 }
 
 function navigate(path) {
-  // Central helper — changing hash triggers `hashchange` which runs the
-  // router. Callers stay decoupled from which view actually mounts.
-  if (location.hash === path) router();  // same hash → force re-route
+  if (location.hash === path) router();
   else location.hash = path;
 }
 
@@ -153,8 +317,6 @@ function currentRoute() {
 async function router() {
   const route = currentRoute();
   if (route.view === "live") {
-    // Reuse the in-flight payload if it matches; otherwise reconstruct
-    // from the server manifest.
     if (CURRENT_PAYLOAD && CURRENT_SID === route.sid) {
       enterLiveView(CURRENT_PAYLOAD, route.sid);
       return;
@@ -233,7 +395,6 @@ async function loadSessions() {
     } else {
       wrap.innerHTML = others.map(_renderSessionCard).join("");
     }
-    // Hash-based anchors navigate themselves on click; no JS handler needed.
   } catch (e) {
     console.warn("sessions load failed", e);
   }
@@ -273,10 +434,24 @@ async function openArchive(sid) {
          }).join("")}</tbody>
        </table>`
     : "";
-  el("arc-verdict").innerHTML = data.verdict ? renderMarkdown(data.verdict) : "";
-  el("arc-verdict-block").hidden = !data.verdict;
-  el("arc-roast").innerHTML = data.roast ? renderMarkdown(data.roast) : "";
-  el("arc-roast-block").hidden = !data.roast;
+  el("arc-verdict").innerHTML = data.verdict ? renderMarkdown(data.verdict) : "<p class='muted'>(no verdict on file)</p>";
+  el("arc-roast").innerHTML = data.roast ? renderMarkdown(data.roast) : "<p class='muted'>(no roast on file)</p>";
+
+  // Hide the roast tab if this debate never had one.
+  const archiveRoot = el("archive");
+  const roastTabBtn = $(`.tab[data-arc-tab="roast"]`, archiveRoot);
+  if (roastTabBtn) roastTabBtn.hidden = !data.roast;
+
+  // Render play-by-play from events.jsonl; fall back to a notice for old
+  // sessions that predate event emission.
+  const playLog = el("arc-play-log");
+  playLog.innerHTML = "";
+  const events = data.events || [];
+  if (!events.length) {
+    playLog.innerHTML = `<li class="ev-empty">No play-by-play recorded for this debate (pre-v0.5 session, or events file missing).</li>`;
+  } else {
+    for (const ev of events) appendNarrativeToLog(playLog, ev);
+  }
 
   const phases = data.phases || {};
   el("arc-phases").innerHTML = Object.keys(phases).sort().map(ph => {
@@ -294,15 +469,15 @@ async function openArchive(sid) {
 
   el("arc-chat").innerHTML = renderChat(data.chat || []);
 
-  // Stash the manifest as a payload-shaped object so the Clone button can
-  // reuse it without re-fetching. Legacy sessions without a manifest get
-  // a no-op clone payload (shouldn't happen for new runs).
   el("arc-clone").dataset.payload = JSON.stringify({
     topic: m.topic || "",
     moderator: m.moderator_agent || "claude",
     sides: sides,
     roast: m.roast_enabled !== false,
   });
+
+  // Reset tab state to play-by-play on each archive open.
+  activateTab($(".tabs", archiveRoot), "play", "data-arc-tab");
 
   el("setup").hidden = true;
   el("live").hidden = true;
@@ -391,7 +566,6 @@ async function submitDebate(ev) {
       return;
     }
     const { session_id } = await r.json();
-    // Remember the payload so router() can skip the server round-trip.
     CURRENT_PAYLOAD = payload;
     CURRENT_SID = session_id;
     navigate(`#/live/${encodeURIComponent(session_id)}`);
@@ -454,10 +628,21 @@ function enterLiveView(payload, sessionId) {
   CURRENT_SID = sessionId;
   CURRENT_PAYLOAD = payload;
   renderDebateInfo(payload);
-  el("verdict-block").hidden = true;
-  el("verdict-body").textContent = "";
-  el("roast-block").hidden = true;
-  el("roast-body").innerHTML = "";
+
+  // Reset the play-by-play log and tab state.
+  el("play-log").innerHTML = `<li class="ev-empty">waiting for the debate to begin…</li>`;
+  el("verdict-body-md").innerHTML = `<p class="muted">waiting for verdict…</p>`;
+  el("verdict-ready-pill").hidden = true;
+  el("roast-ready-pill").hidden = true;
+  el("roast-body").innerHTML = `<p class="muted">waiting for roast…</p>`;
+  // Hide the roast tab if roast is disabled for this debate.
+  const liveRoot = el("live");
+  const roastTabBtn = $(`.tab[data-tab="roast"]`, liveRoot);
+  if (roastTabBtn) roastTabBtn.hidden = payload.roast === false;
+
+  activateTab($(".tabs", liveRoot), "play", "data-tab");
+  setupPlayLogScrollLock();
+
   el("event-log").textContent = "";
 
   const debaters = el("debaters");
@@ -512,7 +697,6 @@ function handleEvent(ev) {
     case "status":
       setStatus(ev.status, ev.status);
       if (ev.status === "done" || ev.status === "error") {
-        // Keep the home page's lists fresh for when you go back.
         loadSessions();
       }
       break;
@@ -528,12 +712,18 @@ function handleEvent(ev) {
       break;
     }
     case "verdict":
-      el("verdict-block").hidden = false;
-      el("verdict-body").textContent = ev.content;
+      el("verdict-body-md").innerHTML = renderMarkdown(ev.content || "");
+      el("verdict-ready-pill").hidden = false;
       break;
     case "roast":
-      el("roast-block").hidden = false;
       el("roast-body").innerHTML = renderMarkdown(ev.content || "");
+      el("roast-ready-pill").hidden = false;
+      break;
+    case "narrative":
+      if (ev.event) {
+        appendNarrativeToLog(el("play-log"), ev.event);
+        maybeAutoScroll();
+      }
       break;
     case "error":
       setStatus("error", "error: " + (ev.message || ""));
@@ -547,6 +737,8 @@ function logEvent(ev) {
     ? `${t}  pane[${ev.role}] (${(ev.text || "").length} chars)`
     : ev.type === "answer"
     ? `${t}  answer[${ev.phase}/${ev.role}] (${(ev.content || "").length} chars)`
+    : ev.type === "narrative"
+    ? `${t}  narrative:${ev.event && ev.event.type}`
     : `${t}  ${ev.type} ${JSON.stringify({ ...ev, id: undefined, ts: undefined, type: undefined })}`;
   const log = el("event-log");
   log.textContent += summary + "\n";
@@ -576,22 +768,23 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#setup-form").addEventListener("submit", submitDebate);
   el("add-side").addEventListener("click", () => addSide({ agent: ADAPTERS[0] }));
 
-  // Navigation — all three buttons just go home. The live debate keeps
-  // running server-side; returning to it via Running now / pasted URL
-  // re-attaches the SSE stream.
+  // Wire up the tab bars once — they're in the DOM from page load.
+  const liveTabs = $("#live .tabs");
+  if (liveTabs) bindTabs(liveTabs, "tab-", "data-tab");
+  const arcTabs = $("#archive .tabs");
+  if (arcTabs) bindTabs(arcTabs, "arc-tab-", "data-arc-tab");
+
   const goHome = () => navigate("#/");
   el("new-debate").addEventListener("click", goHome);
   el("back-home").addEventListener("click", goHome);
   el("live-back").addEventListener("click", goHome);
 
-  // Clone from live view — reuse the last payload, then go home.
   el("clone-live").addEventListener("click", () => {
     if (!CURRENT_PAYLOAD) return;
     fillFormFrom(CURRENT_PAYLOAD);
     navigate("#/");
   });
 
-  // Clone from archive view — payload JSON is stashed on the button.
   el("arc-clone").addEventListener("click", () => {
     const raw = el("arc-clone").dataset.payload;
     if (!raw) return;
@@ -603,7 +796,5 @@ document.addEventListener("DOMContentLoaded", () => {
 
   window.addEventListener("hashchange", router);
 
-  // Boot: load adapters + sessions list, then run the router for the
-  // URL we landed on.
   loadAdapters().then(() => { loadSessions(); router(); });
 });

@@ -22,6 +22,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 
 body {
   margin: 0;
@@ -59,8 +60,169 @@ header h1 { margin: 0; font-size: 1.1rem; letter-spacing: 0.04em; }
 }
 .status.idle { }
 .status.starting, .status.running { color: var(--accent); border-color: var(--accent); }
+.status.starting::before, .status.running::before {
+  content: "";
+  display: inline-block;
+  width: 0.55rem;
+  height: 0.55rem;
+  margin-right: 0.4rem;
+  background: var(--accent);
+  border-radius: 50%;
+  vertical-align: 0.05em;
+  animation: pulse-dot 1.4s ease-in-out infinite;
+}
 .status.done { color: var(--ok); border-color: var(--ok); }
+.status.done::before {
+  content: "✓";
+  margin-right: 0.35rem;
+  font-weight: 700;
+}
 .status.error { color: var(--err); border-color: var(--err); }
+.status.error::before {
+  content: "●";
+  margin-right: 0.35rem;
+}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.75); }
+}
+
+/* Tabs ------------------------------------------------------------- */
+
+.tabs {
+  display: flex;
+  gap: 0.25rem;
+  border-bottom: 1px solid var(--border);
+  margin: 0.6rem 0 0;
+}
+.tab {
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  padding: 0.45rem 0.85rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+  position: relative;
+  top: 1px;
+  cursor: pointer;
+}
+.tab:hover { color: var(--fg); }
+.tab.active {
+  color: var(--fg);
+  border-color: var(--border);
+  border-bottom: 1px solid var(--bg);
+  background: var(--bg);
+}
+.ready-pill {
+  display: inline-block;
+  margin-left: 0.35rem;
+  font-size: 0.7rem;
+  padding: 0.08rem 0.4rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ok) 22%, transparent);
+  color: var(--ok);
+  border: 1px solid color-mix(in srgb, var(--ok) 45%, transparent);
+  animation: pill-pop 0.6s ease-out;
+}
+@keyframes pill-pop {
+  from { transform: scale(0.6); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+.tab-panel { display: none; padding: 0.8rem 0; }
+.tab-panel.active { display: block; }
+
+/* Play-by-play log ------------------------------------------------ */
+
+.log-wrap {
+  position: relative;
+}
+.play-log {
+  list-style: none;
+  margin: 0;
+  padding: 0.5rem 0.6rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  max-height: 65vh;
+  overflow-y: auto;
+  font-size: 0.9rem;
+  scroll-behavior: smooth;
+}
+.play-log li {
+  display: grid;
+  grid-template-columns: 5.5rem 1.6rem 1fr;
+  gap: 0.4rem;
+  align-items: baseline;
+  padding: 0.2rem 0;
+  border-bottom: 1px dashed color-mix(in srgb, var(--border) 60%, transparent);
+}
+.play-log li:last-child { border-bottom: none; }
+.play-log .ev-ts {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+.play-log .ev-icon {
+  text-align: center;
+  font-size: 0.95rem;
+}
+.play-log .ev-body { line-height: 1.4; }
+.play-log .ev-body .role {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: rgba(127,127,127,0.12);
+  padding: 0.02rem 0.3rem;
+  border-radius: 3px;
+  font-size: 0.88em;
+}
+.play-log .ev-body .chat-text {
+  color: var(--fg);
+  font-style: italic;
+}
+.play-log .ev-body .muted { color: var(--muted); }
+.play-log li.ev-phase {
+  margin-top: 0.4rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid var(--border);
+  border-bottom: none;
+}
+.play-log li.ev-phase .ev-body {
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  font-size: 0.8rem;
+  color: var(--accent);
+}
+.play-log li.ev-dropout .ev-body { color: var(--err); }
+.play-log li.ev-done .ev-body { color: var(--ok); font-weight: 600; }
+.play-log .ev-empty {
+  color: var(--muted);
+  text-align: center;
+  font-size: 0.85rem;
+  padding: 1rem 0;
+  display: block;
+  grid-column: 1 / -1;
+  border: none;
+}
+
+.jump-live {
+  position: absolute;
+  right: 1rem;
+  bottom: 0.8rem;
+  background: var(--accent);
+  color: #000;
+  border: none;
+  border-radius: 999px;
+  padding: 0.3rem 0.75rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+  animation: pill-pop 0.25s ease-out;
+}
+.jump-live:hover { background: color-mix(in srgb, var(--accent) 80%, white); }
 
 section { padding: 1rem; }
 

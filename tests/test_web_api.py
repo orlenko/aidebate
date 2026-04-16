@@ -3,6 +3,7 @@
 These hit endpoints that don't need real tmux / CLI agents — listing
 adapters, listing sessions on disk, reading one session's artifacts.
 """
+
 from __future__ import annotations
 
 import json
@@ -83,6 +84,54 @@ def test_session_detail_404_for_unknown(sessions_dir: Path):
     assert r.status_code == 404
 
 
+def test_session_detail_includes_events_jsonl(sessions_dir: Path):
+    sid = "2026-04-14-140000"
+    sdir = sessions_dir / sid
+    sdir.mkdir(parents=True)
+    (sdir / "events.jsonl").write_text(
+        '{"ts":"2026-04-14T14:00:00Z","type":"debate_started","topic":"X?"}\n'
+        '{"ts":"2026-04-14T14:00:05Z","type":"phase_started","phase":"opening"}\n'
+    )
+    client = TestClient(app)
+    r = client.get(f"/api/sessions/{sid}")
+    assert r.status_code == 200
+    data = r.json()
+    assert "events" in data
+    assert [e["type"] for e in data["events"]] == ["debate_started", "phase_started"]
+
+
+def test_session_detail_events_empty_list_when_no_file(sessions_dir: Path):
+    sid = "2026-04-14-150000"
+    sdir = sessions_dir / sid
+    sdir.mkdir(parents=True)
+    client = TestClient(app)
+    r = client.get(f"/api/sessions/{sid}")
+    assert r.status_code == 200
+    assert r.json()["events"] == []
+
+
+def test_session_state_keeps_narrative_events_untrimmed():
+    """If pane events swamp the 500-event buffer, narrative events must
+    still be available for reconnecting clients. Regression guard for the
+    "reconnect to a long-running debate shows a truncated play-by-play"
+    bug.
+    """
+    from aidebate.web.server import SessionState
+
+    st = SessionState(session_id="x", topic="t", sides=[], moderator_agent="claude")
+    # One narrative event.
+    st.emit({"type": "narrative", "event": {"type": "phase_started", "phase": "opening"}})
+    # Now swamp the buffer with non-narrative events.
+    for i in range(st.EVENT_BUFFER_MAX + 50):
+        st.emit({"type": "pane", "role": "pro", "text": f"frame {i}"})
+
+    # The narrative event is long gone from `events` (trimmed)...
+    assert not any(ev.get("type") == "narrative" for ev in st.events)
+    # ...but preserved in the dedicated buffer.
+    assert len(st.narrative_events) == 1
+    assert st.narrative_events[0]["event"]["type"] == "phase_started"
+
+
 def test_session_marked_stale_when_running_but_no_live_state(sessions_dir: Path):
     """Manifest says running but nothing in the in-memory SESSIONS dict
     (server restarted mid-run) — list should downgrade it to 'stale'.
@@ -90,14 +139,18 @@ def test_session_marked_stale_when_running_but_no_live_state(sessions_dir: Path)
     sid = "2026-04-14-200000"
     sdir = sessions_dir / sid
     sdir.mkdir(parents=True)
-    (sdir / "session.json").write_text(json.dumps({
-        "session_id": sid,
-        "topic": "X?",
-        "moderator_agent": "claude",
-        "sides": [],
-        "status": "running",
-        "created_at": "2026-04-14T20:00:00",
-    }))
+    (sdir / "session.json").write_text(
+        json.dumps(
+            {
+                "session_id": sid,
+                "topic": "X?",
+                "moderator_agent": "claude",
+                "sides": [],
+                "status": "running",
+                "created_at": "2026-04-14T20:00:00",
+            }
+        )
+    )
     client = TestClient(app)
     r = client.get("/api/sessions")
     assert r.status_code == 200
@@ -120,10 +173,13 @@ def test_create_debate_walks_import_path(sessions_dir: Path, monkeypatch):
         def __init__(self, sid):
             self.session_id = sid
             from pathlib import Path as _P
+
             self.root = _P(sessions_dir) / sid
             self.root.mkdir(parents=True, exist_ok=True)
             self.panes = {}
-        def kill(self): pass
+
+        def kill(self):
+            pass
 
     def _fake_run(**kwargs):
         sid = "2026-04-14-160000"

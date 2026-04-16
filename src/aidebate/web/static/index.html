@@ -63,32 +63,51 @@
       <div><strong>tmux:</strong> <code id="live-tmux">–</code></div>
     </div>
 
-    <details id="debate-info" open>
+    <details id="debate-info">
       <summary>Debate info</summary>
       <div id="debate-info-body"></div>
     </details>
 
-    <div id="panes" class="panes">
-      <!-- moderator on the left, debaters stacked on the right -->
-      <div id="moderator-pane" class="pane moderator">
-        <h3 class="pane-title">moderator</h3>
-        <pre class="pane-body">waiting…</pre>
-      </div>
-      <div id="debaters"></div>
+    <div class="tabs" role="tablist">
+      <button class="tab active" data-tab="play" role="tab" aria-selected="true">Play-by-play</button>
+      <button class="tab" data-tab="verdict" role="tab" aria-selected="false">
+        Verdict
+        <span class="ready-pill" id="verdict-ready-pill" hidden>✓ ready</span>
+      </button>
+      <button class="tab" data-tab="roast" role="tab" aria-selected="false" hidden>
+        🔥 Roast
+        <span class="ready-pill" id="roast-ready-pill" hidden>✓ ready</span>
+      </button>
     </div>
 
-    <details id="verdict-block" hidden>
-      <summary>Verdict</summary>
-      <pre id="verdict-body"></pre>
-    </details>
+    <div class="tab-panel active" id="tab-play">
+      <div class="log-wrap">
+        <ol id="play-log" class="play-log"></ol>
+        <button class="jump-live" id="jump-live" type="button" hidden>↓ jump to live</button>
+      </div>
+    </div>
 
-    <details id="roast-block" hidden open>
-      <summary>🔥 Roast</summary>
-      <div id="roast-body" class="md"></div>
+    <div class="tab-panel" id="tab-verdict">
+      <div id="verdict-body-md" class="md"><p class="muted">waiting for verdict…</p></div>
+    </div>
+
+    <div class="tab-panel" id="tab-roast">
+      <div id="roast-body" class="md"><p class="muted">waiting for roast…</p></div>
+    </div>
+
+    <details id="raw-output">
+      <summary>Raw agent output (tmux panes)</summary>
+      <div id="panes" class="panes">
+        <div id="moderator-pane" class="pane moderator">
+          <h3 class="pane-title">moderator</h3>
+          <pre class="pane-body">waiting…</pre>
+        </div>
+        <div id="debaters"></div>
+      </div>
     </details>
 
     <details>
-      <summary>Event log</summary>
+      <summary>Raw event stream (debug)</summary>
       <pre id="event-log"></pre>
     </details>
 
@@ -111,20 +130,29 @@
       <div><strong>moderator:</strong> <span id="arc-moderator"></span></div>
     </div>
     <div id="arc-participants"></div>
-    <details id="arc-verdict-block" open>
-      <summary>Verdict</summary>
+
+    <div class="tabs" role="tablist">
+      <button class="tab active" data-arc-tab="play" role="tab" aria-selected="true">Play-by-play</button>
+      <button class="tab" data-arc-tab="verdict" role="tab" aria-selected="false">Verdict</button>
+      <button class="tab" data-arc-tab="roast" role="tab" aria-selected="false" hidden>🔥 Roast</button>
+    </div>
+
+    <div class="tab-panel active" id="arc-tab-play">
+      <ol id="arc-play-log" class="play-log"></ol>
+    </div>
+    <div class="tab-panel" id="arc-tab-verdict">
       <div id="arc-verdict" class="md"></div>
-    </details>
-    <details id="arc-roast-block" open hidden>
-      <summary>🔥 Roast</summary>
+    </div>
+    <div class="tab-panel" id="arc-tab-roast">
       <div id="arc-roast" class="md"></div>
-    </details>
-    <details open>
-      <summary>Phase answers</summary>
+    </div>
+
+    <details>
+      <summary>Phase answers (raw)</summary>
       <div id="arc-phases"></div>
     </details>
     <details>
-      <summary>Group chat</summary>
+      <summary>Group chat (raw)</summary>
       <div id="arc-chat" class="chat"></div>
     </details>
   </section>

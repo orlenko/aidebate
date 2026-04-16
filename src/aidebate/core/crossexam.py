@@ -21,6 +21,7 @@ Model:
   message has arrived within ``silence_timeout``. In-flight turns are given
   a bounded grace period to finish before the phase returns.
 """
+
 from __future__ import annotations
 
 import json
@@ -30,9 +31,9 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .events import EventLog
 from .pane import AgentPane
 from .turn import run_turn
-
 
 # ---------------------------------------------------------------------------
 # chat-say helper: installed into each agent's cwd so the LLM can post a
@@ -110,7 +111,7 @@ def _chat_tail_fmt(msgs: list[dict], limit: int = 30) -> str:
     lines = []
     for m in tail:
         to = ",".join(m.get("to") or []) or "*"
-        lines.append(f"[{m.get('ts','?')}] {m.get('from','?')} -> {to}: {m.get('text','')}")
+        lines.append(f"[{m.get('ts', '?')}] {m.get('from', '?')} -> {to}: {m.get('text', '')}")
     return "\n".join(lines)
 
 
@@ -136,7 +137,7 @@ def _seed_prompt_debater(
         f"specific role (use `--to`). Keep each question to one or two sentences; "
         f"make them sharp, not rhetorical.\n\n"
         f"Post via the helper in this directory:\n"
-        f"  `./chat-say --to <role> \"Your question here?\"`\n\n"
+        f'  `./chat-say --to <role> "Your question here?"`\n\n'
         f"After posting, write `(posted)` to your answer file and touch .done."
     )
 
@@ -147,9 +148,7 @@ def _seed_prompt_moderator(
     openings: dict[str, str],
     chat_path: Path,
 ) -> str:
-    opening_blocks = "\n\n".join(
-        f"### {r}\n{t}" for r, t in openings.items()
-    )
+    opening_blocks = "\n\n".join(f"### {r}\n{t}" for r, t in openings.items())
     return (
         f"# Cross-examination — moderator watch\n\n"
         f"## Topic\n{topic}\n\n"
@@ -165,8 +164,8 @@ def _seed_prompt_moderator(
         f"For this first turn: read the openings above and post ONE sharp "
         f"framing question to the whole group to kick off the exchange.\n\n"
         f"Post via:\n"
-        f"  `./chat-say --to <role>[,<role>] \"...\"`   (targeted)\n"
-        f"  `./chat-say \"...\"`                         (broadcast)\n\n"
+        f'  `./chat-say --to <role>[,<role>] "..."`   (targeted)\n'
+        f'  `./chat-say "..."`                         (broadcast)\n\n'
         f"After posting, write `(posted)` to your answer file and touch .done."
     )
 
@@ -179,11 +178,14 @@ def _nudge_prompt(
     recent_chat: list[dict],
     chat_path: Path,
 ) -> str:
-    addressed_block = "\n".join(
-        f"- from `{m.get('from','?')}` (to {','.join(m.get('to') or []) or '*'}): "
-        f"{m.get('text','')}"
-        for m in batched
-    ) or "(none — general nudge)"
+    addressed_block = (
+        "\n".join(
+            f"- from `{m.get('from', '?')}` (to {','.join(m.get('to') or []) or '*'}): "
+            f"{m.get('text', '')}"
+            for m in batched
+        )
+        or "(none — general nudge)"
+    )
     role_header = (
         f"## Your role: {role} (moderator)"
         if is_moderator
@@ -212,8 +214,8 @@ def _nudge_prompt(
         f"## Messages addressed to you since your last turn\n{addressed_block}\n\n"
         f"## Recent chat (last {len(recent_chat)})\n{_chat_tail_fmt(recent_chat)}\n\n"
         f"## Your task\n{action}\n\n"
-        f"To post: `./chat-say --to <role>[,<role>] \"...\"` (targeted) "
-        f"or `./chat-say \"...\"` (broadcast). Then write `(posted)` to your "
+        f'To post: `./chat-say --to <role>[,<role>] "..."` (targeted) '
+        f'or `./chat-say "..."` (broadcast). Then write `(posted)` to your '
         f"answer file and touch .done."
     )
 
@@ -259,16 +261,18 @@ def run_crossexam(
     session_root: Path,
     chat_path: Path,
     moderator: AgentPane,
-    debaters: dict[str, AgentPane],          # role -> pane
-    stances: dict[str, str],                 # role -> stance
+    debaters: dict[str, AgentPane],  # role -> pane
+    stances: dict[str, str],  # role -> stance
     topic: str,
     openings: dict[str, str],
     wallclock: float = 300.0,
     silence_timeout: float = 180.0,
     moderator_silence_nudge: float = 60.0,
     turn_timeout: float = 300.0,
+    event_log: EventLog,
 ) -> Path:
     """Run the cross-examination phase. Returns the phase directory."""
+    events = event_log
     phase_dir = session_root / "phase-2-crossexam"
     phase_dir.mkdir(exist_ok=True)
 
@@ -326,12 +330,9 @@ def run_crossexam(
             if _SEED_MARKER in batch:
                 if is_mod:
                     sides_desc = "\n".join(
-                        f"- {r}: {stances.get(r, '(no stance)')}"
-                        for r in debaters.keys()
+                        f"- {r}: {stances.get(r, '(no stance)')}" for r in debaters.keys()
                     )
-                    prompt = _seed_prompt_moderator(
-                        topic, sides_desc, openings, chat_path
-                    )
+                    prompt = _seed_prompt_moderator(topic, sides_desc, openings, chat_path)
                 else:
                     prompt = _seed_prompt_debater(
                         role,
@@ -384,6 +385,14 @@ def run_crossexam(
                     sender = m.get("from")
                     with lock:
                         last_message_ts[0] = time.monotonic()
+                    events.emit(
+                        "chat_message",
+                        **{
+                            "from": sender,
+                            "to": m.get("to") or [],
+                            "text": m.get("text", ""),
+                        },
+                    )
                     for role in all_panes.keys():
                         if role == sender:
                             continue
@@ -402,7 +411,10 @@ def run_crossexam(
                 since = time.monotonic() - last_message_ts[0]
             # Only prod moderator if silence > moderator_silence_nudge,
             # and no more than once per moderator_silence_nudge window.
-            if since >= moderator_silence_nudge and (time.monotonic() - last_prod) >= moderator_silence_nudge:
+            if (
+                since >= moderator_silence_nudge
+                and (time.monotonic() - last_prod) >= moderator_silence_nudge
+            ):
                 # Use a synthetic non-addressed item so the worker falls into
                 # the moderator stall branch.
                 states["moderator"].q.put({"__stall__": True})
