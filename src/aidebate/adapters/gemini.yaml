@@ -10,9 +10,14 @@ permission_prompts:
   # Enter there instead.
   - { match: "Do you trust the following", respond: "1" }
   - { match: "Do you trust",               respond: "" }
+  # Gemini 0.38.1+ no longer auto-approves WriteFile/Shell under --yolo; it
+  # raises a numbered "Apply this change?" / "Run this command?" radio
+  # dialog mid-task. Respond "1" explicitly (the highlighted default) so a
+  # stray keystroke can't shift the selection before we hit Enter.
+  - { match: "Apply this change\\?",       respond: "1" }
+  - { match: "Run this command\\?",        respond: "1" }
   - { match: "\\[y/N\\]",                  respond: "y" }
   - { match: "\\(y/n\\)",                  respond: "y" }
-  - { match: "Allow",                      respond: "y" }
 ready_patterns:
   # Gemini's startup can linger on update/trust banners after the fixed
   # startup key timings. Wait for its actual composer UI before sending
