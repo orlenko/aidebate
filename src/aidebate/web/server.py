@@ -12,6 +12,7 @@ One-process app:
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
 import queue
 import threading
@@ -30,6 +31,61 @@ from aidebate.core.events import EventLog, read_events
 from aidebate.core.session import DebateSession, sessions_root
 
 HERE = Path(__file__).resolve().parent
+
+# ---------------------------------------------------------------------------
+# Per-subscriber event buffer
+# ---------------------------------------------------------------------------
+
+
+class EventBuffer:
+    """Bounded FIFO buffer for one SSE subscriber, with priority-aware drop.
+
+    When full, eviction picks the oldest *non-priority* event so that
+    terminal events (verdict, roast, status, error, debate_completed)
+    can never be silently dropped under pane-event pressure. If the
+    buffer happens to be at capacity with all priority events — a
+    degenerate case — the new event is still appended (temporary
+    overflow), because losing a terminal event is worse than a one-tick
+    size bump. Consumers drain via `get(timeout)` which mirrors
+    `queue.Queue.get(block=True, timeout=...)` and raises `queue.Empty`
+    when the timeout elapses.
+    """
+
+    PRIORITY_TYPES = frozenset({"verdict", "roast", "status", "error", "debate_completed"})
+
+    def __init__(self, maxsize: int) -> None:
+        self._maxsize = maxsize
+        self._items: collections.deque[dict] = collections.deque()
+        self._cond = threading.Condition()
+
+    def put(self, item: dict) -> None:
+        with self._cond:
+            if len(self._items) >= self._maxsize:
+                # Evict the oldest non-priority event. Walking the deque
+                # is O(n) but n<=maxsize and only fires under overflow,
+                # which is rare — acceptable for the correctness win.
+                for i, existing in enumerate(self._items):
+                    if existing.get("type") not in self.PRIORITY_TYPES:
+                        del self._items[i]
+                        break
+                # else: no evictable event — fall through and overflow.
+            self._items.append(item)
+            self._cond.notify()
+
+    def get(self, timeout: float | None = None) -> dict:
+        with self._cond:
+            if timeout is None:
+                while not self._items:
+                    self._cond.wait()
+            else:
+                end = time.monotonic() + timeout
+                while not self._items:
+                    remaining = end - time.monotonic()
+                    if remaining <= 0:
+                        raise queue.Empty
+                    self._cond.wait(remaining)
+            return self._items.popleft()
+
 
 # ---------------------------------------------------------------------------
 # In-memory session registry
@@ -59,8 +115,13 @@ class SessionState:
     # Narrative events are low-volume (expected <100 per debate), so no
     # trim is needed.
     narrative_events: list[dict] = field(default_factory=list)
-    subscribers: list[queue.Queue] = field(default_factory=list)
+    subscribers: list[EventBuffer] = field(default_factory=list)
     _lock: threading.Lock = field(default_factory=threading.Lock)
+    # Monotonic event id counter. Previously this used `len(self.events)`,
+    # which froze at EVENT_BUFFER_MAX once the buffer capped — every event
+    # after that got the same id. Keeping a separate counter lets clients
+    # dedupe or `since_id` replay correctly even across cap boundaries.
+    _next_event_id: int = 0
 
     # Cap the in-memory event buffer so long-running servers don't
     # accumulate unbounded pane captures. New subscribers still get a
@@ -68,8 +129,9 @@ class SessionState:
     EVENT_BUFFER_MAX: int = 500
 
     def emit(self, event: dict) -> None:
-        event = {"id": len(self.events), **event, "ts": time.time()}
         with self._lock:
+            event = {"id": self._next_event_id, **event, "ts": time.time()}
+            self._next_event_id += 1
             self.events.append(event)
             if event.get("type") == "narrative":
                 self.narrative_events.append(event)
@@ -78,25 +140,11 @@ class SessionState:
                 # path O(1) amortized.
                 self.events = self.events[-self.EVENT_BUFFER_MAX :]
             subs = list(self.subscribers)
+        # EventBuffer.put handles priority-aware eviction internally —
+        # terminal events (verdict, roast, status=done, etc.) survive
+        # even under sustained pane-event pressure.
         for q in subs:
-            try:
-                q.put_nowait(event)
-            except queue.Full:
-                # Queue full: drop the oldest item to make room. Pane
-                # captures dominate the queue as a constant stream of
-                # terminal snapshots, so the oldest item is almost always
-                # a stale pane event we can safely lose. What we MUST NOT
-                # lose is late-debate terminal events (verdict, roast,
-                # status=done) — dropping those silently was a real bug
-                # that left the UI stuck.
-                try:
-                    q.get_nowait()
-                except queue.Empty:
-                    pass
-                try:
-                    q.put_nowait(event)
-                except queue.Full:
-                    pass
+            q.put(event)
 
 
 SESSIONS: dict[str, SessionState] = {}
@@ -511,7 +559,7 @@ async def stream_events(sid: str) -> StreamingResponse:
     if state is None:
         raise HTTPException(404, "no such debate")
 
-    q: queue.Queue = queue.Queue(maxsize=1024)
+    q = EventBuffer(maxsize=1024)
     # Snapshot both buffers and register the subscriber atomically, so
     # events emitted concurrently by the poller either land entirely in
     # our snapshot (if before the lock) or entirely in our queue (if
@@ -533,7 +581,7 @@ async def stream_events(sid: str) -> StreamingResponse:
                 yield f"data: {json.dumps(ev)}\n\n"
             while True:
                 try:
-                    ev = await asyncio.get_event_loop().run_in_executor(None, q.get, True, 15.0)
+                    ev = await asyncio.get_event_loop().run_in_executor(None, q.get, 15.0)
                 except queue.Empty:
                     # SSE keep-alive comment.
                     yield ": keepalive\n\n"
