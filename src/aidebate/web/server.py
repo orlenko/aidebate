@@ -100,13 +100,19 @@ class SessionState:
     moderator_agent: str
     crossexam_wallclock: float = 300.0
     crossexam_silence: float = 180.0
-    roast: bool = True
+    # Was the roast phase enabled for this debate? (boolean config flag).
+    # Kept distinct from `roast` (the rendered roast content) after a
+    # previous collision where both attributes shared a name and the later
+    # one silently shadowed the earlier — any `if state.roast:` check was
+    # lying about its meaning half the time.
+    roast_enabled: bool = True
     debate_session: DebateSession | None = None
     thread: threading.Thread | None = None
     poller: threading.Thread | None = None
     status: str = "starting"  # starting, running, done, error
     error: str | None = None
     verdict: str | None = None
+    # Content of roast.md after phase 5 completes, or None if not yet run.
     roast: str | None = None
     events: list[dict] = field(default_factory=list)
     # Narrative events (play-by-play) kept in a separate, untrimmed buffer
@@ -271,7 +277,7 @@ def _run_debate_thread(state: SessionState) -> None:
             moderator_agent=state.moderator_agent,
             crossexam_wallclock=state.crossexam_wallclock,
             crossexam_silence=state.crossexam_silence,
-            roast=state.roast,
+            roast=state.roast_enabled,
             on_session_ready=_on_ready,
         )
         state.status = "done"
@@ -467,7 +473,7 @@ def create_debate(payload: dict) -> dict:
         moderator_agent=moderator,
         crossexam_wallclock=crossexam_wallclock,
         crossexam_silence=crossexam_silence,
-        roast=bool(payload.get("roast", True)),
+        roast_enabled=bool(payload.get("roast", True)),
     )
 
     # Because run_debate allocates its own id, we use the state's sid only
@@ -517,6 +523,7 @@ def get_debate(sid: str) -> JSONResponse:
             "status": state.status,
             "error": state.error,
             "verdict": state.verdict,
+            "roast": state.roast,
             "event_count": len(state.events),
         }
     )
