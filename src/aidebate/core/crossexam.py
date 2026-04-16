@@ -372,7 +372,6 @@ def run_crossexam(
 
     # --- Chat watcher: dispatches messages to role queues ---------------
 
-    last_message_time = threading.Event()  # used as a signal, not a flag
     last_message_ts = [time.monotonic()]
     lock = threading.Lock()
 

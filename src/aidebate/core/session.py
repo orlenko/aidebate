@@ -1,7 +1,10 @@
 """tmux session lifecycle for a debate."""
+
 from __future__ import annotations
 
 import os
+import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -136,12 +139,10 @@ def spawn_agent_pane(
     # don't block each other. Used e.g. to dismiss gemini's "trust folder"
     # dialog whose default is already what we want.
     if adapter.startup_keys:
-        import threading
-        import time as _time
 
         def _fire_startup() -> None:
             for sk in adapter.startup_keys:
-                _time.sleep(sk.delay)
+                time.sleep(sk.delay)
                 try:
                     pane.cmd("send-keys", sk.key)
                 except Exception:

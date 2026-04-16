@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -347,7 +348,6 @@ def run_debate(
     # -----------------------------------------------------------------
     print(f"[debate] canary handshakes (timeout {canary_timeout}s)...")
     events.emit("canary_started")
-    import threading
 
     canary_errors: dict[str, Exception] = {}
 
