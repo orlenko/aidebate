@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 cd "$ROOT"
 
-HOST=${HOST:-127.0.0.1}
+HOST=${HOST:-0.0.0.0}
 PORT=${PORT:-8765}
 LOG=${LOG:-/tmp/aidebate-server.log}
 
@@ -14,6 +14,16 @@ if [[ -n "$PIDS" ]]; then
   kill $PIDS
   sleep 1
 fi
+
+# Refresh the editable install's dist-info so /api/version reports the
+# current pyproject.toml version. importlib.metadata reads from the
+# dist-info dir that pip generates at install time — bumping
+# pyproject.toml alone doesn't update it. --no-deps skips re-resolving
+# deps; --force-reinstall is what rewrites the metadata.
+echo "Refreshing editable install metadata..."
+./.venv/bin/pip install -e . --no-deps --force-reinstall --quiet
+VERSION=$(./.venv/bin/python -c "from importlib.metadata import version; print(version('aidebate'))")
+echo "aidebate version: $VERSION"
 
 echo "Starting aidebate server on $HOST:$PORT"
 PYTHONPATH=src nohup ./.venv/bin/python -m aidebate.cli serve --host "$HOST" --port "$PORT" >"$LOG" 2>&1 &
